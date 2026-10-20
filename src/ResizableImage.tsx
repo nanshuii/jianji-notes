@@ -48,9 +48,10 @@ function ImageView({ node, updateAttributes, selected }: NodeViewProps) {
   return (
     <NodeViewWrapper
       ref={wrapRef}
+      as="span"
       className={`img-wrap${selected ? ' selected' : ''}`}
       data-drag-handle
-      title="按住拖动可挪位置"
+      title="按住拖动可挪位置，缩小后旁边还能写字"
     >
       <img
         ref={imgRef}

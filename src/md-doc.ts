@@ -244,17 +244,22 @@ export function mdToDoc(src: string): PMNode {
       continue
     }
 
-    // 独占一行的图片
+    // 独占一行的图片 → 单独一个段落（图片是行内节点，必须挂在段落里）
     const imgOnly = IMG.exec(line.trim())
     if (imgOnly && imgOnly[0] === line.trim()) {
       const w = imgOnly[3] ? Number(imgOnly[3]) : NaN
       nodes.push({
-        type: 'image',
-        attrs: {
-          src: imgOnly[2],
-          alt: imgOnly[1],
-          ...(Number.isFinite(w) && w > 0 ? { width: w } : {}),
-        },
+        type: 'paragraph',
+        content: [
+          {
+            type: 'image',
+            attrs: {
+              src: imgOnly[2],
+              alt: imgOnly[1],
+              ...(Number.isFinite(w) && w > 0 ? { width: w } : {}),
+            },
+          },
+        ],
       })
       i += 1
       continue

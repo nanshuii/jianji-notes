@@ -839,14 +839,17 @@ button {
   text-underline-offset: 2px;
 }
 
-/* 图片：可拖动挪位，选中后拖右下角圆点缩放 */
+/* 图片：行内节点，可拖动挪位，选中后拖右下角圆点缩放，缩小后两侧能写字 */
 .rich-body .img-wrap {
   position: relative;
-  display: block;
+  display: inline-block;
   max-width: 100%;
-  margin: 8px 0;
-  line-height: 0;
+  vertical-align: middle;
+  margin: 2px 4px;
   cursor: grab;
+  /* 让圆点贴着图片角，而不是贴着整行 */
+  width: fit-content;
+  line-height: 0;
 }
 
 .rich-body .img-wrap:active {
@@ -868,8 +871,8 @@ button {
 
 .rich-body .img-resize {
   position: absolute;
-  right: 8px;
-  bottom: 8px;
+  right: -2px;
+  bottom: -2px;
   width: 16px;
   height: 16px;
   border-radius: 50%;
@@ -879,6 +882,7 @@ button {
   opacity: 0;
   cursor: ew-resize;
   transition: opacity 0.12s;
+  z-index: 2;
 }
 
 .rich-body .img-wrap:hover .img-resize,

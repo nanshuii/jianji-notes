@@ -57,7 +57,8 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
         codeBlock: { HTMLAttributes: { class: 'code' } },
       }),
       Link.configure({ openOnClick: false, autolink: true }),
-      ResizableImage.configure({ allowBase64: true, inline: false }),
+      // inline：图片是行内节点，缩小后文字可以排在图片左右，也能拖到任意文字位置
+      ResizableImage.configure({ allowBase64: true, inline: true }),
       TaskList,
       TaskItem.configure({ nested: true }),
       Placeholder.configure({ placeholder: '从这里开始写…' }),
