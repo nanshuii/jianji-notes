@@ -56,16 +56,280 @@ button {
   height: 100%;
 }
 
-/* ---------------- 侧边栏 ---------------- */
+/* ---------------- 笔记本栏（第一栏） ---------------- */
+
+.rail {
+  width: 190px;
+  flex: 0 0 190px;
+  background: #eeebe4;
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  padding: 16px 8px 8px;
+  position: relative;
+  transition: width 0.16s ease, flex-basis 0.16s ease;
+}
+
+.rail.closed {
+  width: 54px;
+  flex-basis: 54px;
+}
+
+.rail-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 14px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.rail-top strong {
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
+
+.rail.closed .rail-top {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* 折叠按钮贴在栏的右边缘，鼠标移上去才出现 */
+.rail-toggle {
+  position: absolute;
+  right: -9px;
+  top: 21px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--sub);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 4;
+}
+
+.rail:hover .rail-toggle {
+  opacity: 1;
+}
+
+.rail-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.rail-scroll {
+  overflow-y: auto;
+  flex: 1;
+  margin: 0 -2px;
+  padding: 0 2px;
+}
+
+.rail-label {
+  font-size: 10.5px;
+  color: #a9a297;
+  letter-spacing: 0.06em;
+  padding: 14px 8px 5px;
+}
+
+.rail-item {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  border-radius: 7px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: background 0.12s;
+}
+
+.rail-item:hover {
+  background: rgba(0, 0, 0, 0.045);
+}
+
+.rail-item.active {
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 0 0 1px rgba(0, 0, 0, 0.03);
+}
+
+.rail-ico {
+  color: var(--sub);
+  font-size: 10px;
+  width: 12px;
+  flex: 0 0 12px;
+  text-align: center;
+}
+
+.rail-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: 6px;
+}
+
+.rail-count {
+  font-size: 10.5px;
+  color: #a9a297;
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+/* 笔记本项：主体可点，操作按钮 hover 才出现 */
+.rail-item.nb {
+  padding: 0;
+}
+
+.rail-main {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  border-radius: 7px;
+  min-width: 0;
+}
+
+.rail-acts {
+  display: none;
+  gap: 1px;
+  padding-right: 4px;
+}
+
+.rail-item.nb:hover .rail-acts {
+  display: flex;
+}
+
+.rail-acts button {
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--sub);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0;
+}
+
+.rail-acts button:hover {
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--text);
+}
+
+.rail-acts button:last-child:hover {
+  color: #c0392b;
+}
+
+.rail.closed .rail-item,
+.rail.closed .rail-main {
+  justify-content: center;
+  padding: 0;
+}
+
+.rail-add {
+  margin-top: 6px;
+  height: 30px;
+  border: 1px dashed #d9d3c9;
+  background: transparent;
+  border-radius: 7px;
+  color: var(--sub);
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.rail-add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.rail-empty {
+  font-size: 11.5px;
+  color: #b3aca1;
+  padding: 8px;
+}
+
+.rail-foot {
+  font-size: 10px;
+  color: #b3aca1;
+  padding: 8px 6px 2px;
+  border-top: 1px solid var(--line);
+  margin-top: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------------- 侧边栏（第二栏） ---------------- */
 
 .sidebar {
-  width: 272px;
-  flex: 0 0 272px;
+  width: 268px;
+  flex: 0 0 268px;
   background: var(--panel);
   border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   padding: 16px 12px 8px;
+}
+
+.list-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px 10px;
+}
+
+.list-scope {
+  flex: 1;
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scope-del {
+  border: 0;
+  background: transparent;
+  color: #b3aca1;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 5px;
+  border-radius: 5px;
+}
+
+.scope-del:hover {
+  color: #c0392b;
+  background: rgba(192, 95, 58, 0.1);
 }
 
 .brand {
@@ -259,6 +523,41 @@ button {
   color: #a9a297;
   text-align: center;
   padding: 30px 0;
+}
+
+/* 搜索结果里标注笔记属于哪个笔记本 */
+.note-nb {
+  font-size: 10px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-top: 5px;
+  margin-left: 11px;
+  display: inline-block;
+  max-width: calc(100% - 11px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 编辑器里切换笔记本的下拉 */
+.nb-select {
+  height: 20px;
+  border: 0;
+  background: transparent;
+  font-size: 11px;
+  color: var(--accent);
+  font-family: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+  border-radius: 4px;
+  max-width: 130px;
+  outline: none;
+}
+
+.nb-select:hover {
+  background: var(--accent-soft);
 }
 
 .sidebar-foot {
@@ -733,6 +1032,37 @@ textarea.editor::placeholder {
   background: #c0392b;
   border-color: #c0392b;
   color: #fff;
+}
+
+.modal-actions button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* 新建 / 重命名笔记本的输入框 */
+.modal-input {
+  width: 100%;
+  height: 34px;
+  margin: 0 0 14px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #fff;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.modal-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.modal-input::placeholder {
+  color: #bdb6ab;
 }
 
 @keyframes fade {

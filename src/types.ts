@@ -1,8 +1,13 @@
 export type NoteType = 'note' | 'list'
 
 export interface Note {
-  /** 文件名，含 .md 后缀，例如 今天的清单.md */
+  /**
+   * 相对笔记根目录的路径，用 / 分隔：
+   * 根目录下的笔记是 "周报.md"，笔记本里的则是 "工作/周报.md"
+   */
   file: string
+  /** 所属笔记本，空字符串表示未分类（文件直接放在根目录） */
+  notebook: string
   title: string
   type: NoteType
   body: string
@@ -16,6 +21,23 @@ export interface RawFile {
   content: string
 }
 
+/** 从相对路径里取出笔记本名；根目录下的文件返回空串 */
+export function notebookOf(file: string): string {
+  const i = file.indexOf('/')
+  return i < 0 ? '' : file.slice(0, i)
+}
+
+/** 去掉笔记本前缀，只留文件名 */
+export function baseName(file: string): string {
+  const i = file.indexOf('/')
+  return i < 0 ? file : file.slice(i + 1)
+}
+
+/** 把笔记本名和文件名拼成相对路径 */
+export function notePath(notebook: string, fileName: string): string {
+  return notebook ? `${notebook}/${fileName}` : fileName
+}
+
 const FM = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/
 
 function firstHeading(body: string): string {
@@ -24,7 +46,7 @@ function firstHeading(body: string): string {
 }
 
 function stripExt(name: string): string {
-  return name.replace(/\.md$/i, '')
+  return baseName(name).replace(/\.md$/i, '')
 }
 
 export function parseNote(file: string, content: string): Note {
@@ -47,6 +69,7 @@ export function parseNote(file: string, content: string): Note {
 
   return {
     file,
+    notebook: notebookOf(file),
     title: meta.title || firstHeading(body) || stripExt(file) || '未命名',
     type: meta.type === 'list' ? 'list' : 'note',
     body: body.replace(/^\n+/, ''),

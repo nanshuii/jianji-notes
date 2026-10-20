@@ -6,7 +6,8 @@ src-tauri/target2/
 src-tauri/gen/schemas/
 
 # 日志与临时文件
-build.log
+build*.log
+*.log
 *.md.tmp
 
 # 系统文件
