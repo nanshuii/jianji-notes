@@ -4,9 +4,49 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>简记</title>
+    <style>
+      body {
+        margin: 0;
+        background: #fbfaf8;
+      }
+      #boot {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-content: center;
+        justify-items: center;
+        gap: 14px;
+        font: 14px/1.6 -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
+        color: #8a8378;
+        background: #fbfaf8;
+      }
+      #boot .mark {
+        width: 46px;
+        height: 46px;
+        border-radius: 12px;
+        background: #c05f3a;
+        color: #fff;
+        display: grid;
+        place-items: center;
+        font-size: 22px;
+        font-weight: 600;
+      }
+    </style>
+    <script>
+      // 启动探针：记录页面骨架是否加载到（排查白屏时有用，正常使用无感）
+      try {
+        localStorage.setItem('jianji.bootHtml', new Date().toISOString())
+      } catch (e) {}
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="boot">
+        <div class="mark">简</div>
+        <div>正在打开…</div>
+      </div>
+    </div>
+    <noscript>简记需要开启 JavaScript。</noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
