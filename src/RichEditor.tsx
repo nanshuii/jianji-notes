@@ -52,8 +52,8 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
   )
   const changeRef = useRef(onChange)
   changeRef.current = onChange
-  // 正在裁剪的图片（弹窗打开时置顶工具栏保持文字态）
-  const [cropSrc, setCropSrc] = useState<string | null>(null)
+  // 正在裁剪的图片（同时记住它在文档里的位置，裁剪结果按位置写回）
+  const [crop, setCrop] = useState<{ src: string; pos: number } | null>(null)
 
   const editor = useEditor({
     extensions: [
@@ -148,26 +148,33 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
 
   // 选中的是图片时，顶部工具栏换成图片工具；点文字/空白自动切回来
   const sel = editor.state.selection
-  const imageSelected =
-    sel instanceof NodeSelection && sel.node.type.name === 'image' && !cropSrc
+  const imageSelected = sel instanceof NodeSelection && sel.node.type.name === 'image' && !crop
 
   return (
     <div className="rich">
       {imageSelected ? (
-        <ImageToolbar editor={editor} onCrop={setCropSrc} />
+        <ImageToolbar editor={editor} onCrop={(src, pos) => setCrop({ src, pos })} />
       ) : (
         <Toolbar editor={editor} onPickImage={() => pickerRef.current?.click()} />
       )}
       <div className="paper">
         <EditorContent editor={editor} />
       </div>
-      {cropSrc && (
+      {crop && (
         <CropModal
-          src={cropSrc}
-          onCancel={() => setCropSrc(null)}
+          src={crop.src}
+          onCancel={() => setCrop(null)}
           onApply={(dataUrl) => {
-            editor.chain().updateAttributes('image', { src: dataUrl }).run()
-            setCropSrc(null)
+            const cur = editor.state.doc.nodeAt(crop.pos)
+            if (cur && cur.type.name === 'image') {
+              editor.view.dispatch(
+                editor.state.tr.setNodeMarkup(crop.pos, undefined, {
+                  ...cur.attrs,
+                  src: dataUrl,
+                }),
+              )
+            }
+            setCrop(null)
           }}
         />
       )}

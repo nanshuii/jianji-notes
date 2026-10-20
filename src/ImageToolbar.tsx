@@ -15,10 +15,27 @@ function selectedImage(editor: Editor) {
   return { node, from: sel.from }
 }
 
-function apply(editor: Editor, node: ReturnType<typeof selectedImage>, patch: Partial<ImgState>) {
-  if (!node) return
-  const next: ImgState = { ...readImgState(node.node), ...patch }
-  editor.chain().updateAttributes('image', imgAttrsFrom(next)).run()
+/**
+ * 直接按位置改节点属性。
+ * 注意：不能用 editor.commands.updateAttributes —— 图片是 NodeSelection（空选区），
+ * Tiptap 在空选区下用 nodesBetween(from, to) 找不到节点，命令会静默失效。
+ */
+export function setImageAttrs(editor: Editor, pos: number, patch: Partial<ImgState>) {
+  const cur = editor.state.doc.nodeAt(pos)
+  if (!cur || cur.type.name !== 'image') return
+  const next: ImgState = { ...readImgState(cur), ...patch }
+  const tr = editor.state.tr.setNodeMarkup(pos, undefined, { ...cur.attrs, ...imgAttrsFrom(next) })
+  editor.view.dispatch(tr)
+  // 诊断用：记录最近一次图片属性操作，排查“点了没反应”时读这条
+  try {
+    localStorage.setItem('jianji.imgTool', `${new Date().toISOString()} ${JSON.stringify(patch)}`)
+  } catch {
+    /* 忽略 */
+  }
+}
+
+function apply(editor: Editor, sel: NonNullable<ReturnType<typeof selectedImage>>, patch: Partial<ImgState>) {
+  setImageAttrs(editor, sel.from, patch)
 }
 
 /** 光标移到图片后面，方便接着打字 */
@@ -34,7 +51,13 @@ function focusAfterImage(editor: Editor, from: number, nodeSize: number) {
 
 const BORDER_STEPS = [0, 1, 2, 4, 6]
 
-export function ImageToolbar({ editor, onCrop }: { editor: Editor; onCrop: (src: string) => void }) {
+export function ImageToolbar({
+  editor,
+  onCrop,
+}: {
+  editor: Editor
+  onCrop: (src: string, pos: number) => void
+}) {
   const sel = selectedImage(editor)
   if (!sel) return null
   const st = readImgState(sel.node)
@@ -51,27 +74,65 @@ export function ImageToolbar({ editor, onCrop }: { editor: Editor; onCrop: (src:
     if (align) focusAfterImage(editor, sel.from, sel.node.nodeSize)
   }
 
+  const [copied, setCopied] = useState('')
+  const flash = (text: string) => {
+    setCopied(text)
+    window.setTimeout(() => setCopied(''), 1600)
+  }
+
+  /** 画到 canvas 再转 PNG，作为 ClipboardItem 的 Promise（保住用户手势，不然 WebKit 拒绝写） */
+  const pngBlob = async (): Promise<Blob> => {
+    const res = await fetch(src)
+    const blob = await res.blob()
+    const bmp = await createImageBitmap(blob)
+    const canvas = document.createElement('canvas')
+    canvas.width = bmp.width
+    canvas.height = bmp.height
+    canvas.getContext('2d')?.drawImage(bmp, 0, 0)
+    bmp.close()
+    return new Promise<Blob>((resolve, reject) =>
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/png'),
+    )
+  }
+
   const copyImage = async () => {
+    if (!src) return
     try {
-      const res = await fetch(src)
-      const blob = await res.blob()
-      const bmp = await createImageBitmap(blob)
-      const canvas = document.createElement('canvas')
-      canvas.width = bmp.width
-      canvas.height = bmp.height
-      canvas.getContext('2d')?.drawImage(bmp, 0, 0)
-      bmp.close()
-      const png = await new Promise<Blob>((resolve, reject) =>
-        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/png'),
-      )
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob() })])
+      flash('已复制')
+      return
     } catch {
-      // 剪贴板不给写图片时，退而求其次复制 Markdown
-      try {
-        await navigator.clipboard.writeText(`![${String(sel.node.attrs.alt ?? '')}](${src})`)
-      } catch {
-        /* 忽略 */
+      /* 继续走退路 */
+    }
+    // 退路：把图片放进临时节点，用原生 copy 命令
+    try {
+      const holder = document.createElement('div')
+      holder.contentEditable = 'true'
+      holder.style.cssText = 'position:fixed;left:-9999px;top:0'
+      const im = document.createElement('img')
+      im.src = src
+      holder.appendChild(im)
+      document.body.appendChild(holder)
+      const range = document.createRange()
+      range.selectNode(im)
+      const sel2 = window.getSelection()
+      sel2?.removeAllRanges()
+      sel2?.addRange(range)
+      const ok = document.execCommand('copy')
+      sel2?.removeAllRanges()
+      holder.remove()
+      if (ok) {
+        flash('已复制')
+        return
       }
+    } catch {
+      /* 忽略 */
+    }
+    try {
+      await navigator.clipboard.writeText(`![${String(sel.node.attrs.alt ?? '')}](${src})`)
+      flash('已复制为文本')
+    } catch {
+      flash('复制失败')
     }
   }
 
@@ -98,12 +159,12 @@ export function ImageToolbar({ editor, onCrop }: { editor: Editor; onCrop: (src:
       </button>
       <span className="sep" />
       <button type="button" title="裁剪这张图片"
-        onMouseDown={(e) => e.preventDefault()} onClick={() => onCrop(src)}>
+        onMouseDown={(e) => e.preventDefault()} onClick={() => onCrop(src, sel.from)}>
         裁剪
       </button>
       <button type="button" title="把图片复制到系统剪贴板"
         onMouseDown={(e) => e.preventDefault()} onClick={() => void copyImage()}>
-        复制
+        {copied || '复制'}
       </button>
       <span className="sep" />
       <ColorButton editor={editor} sel={sel} st={st} />
