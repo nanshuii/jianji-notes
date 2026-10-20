@@ -890,6 +890,53 @@ button {
   opacity: 0.95;
 }
 
+/* 环绕排版：浮动后，后面的文字会绕成多行 */
+.rich-body .img-wrap.img-float-left {
+  float: left;
+  margin: 4px 16px 8px 0;
+}
+
+.rich-body .img-wrap.img-float-right {
+  float: right;
+  margin: 4px 0 8px 16px;
+}
+
+/* 选中图片时左上角出现的「左 / 右 / 整行」 */
+.rich-body .img-tools {
+  position: absolute;
+  left: 6px;
+  top: 6px;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #e8e2d8;
+  box-shadow: 0 2px 8px rgba(50, 40, 30, 0.14);
+  line-height: 1;
+  z-index: 3;
+}
+
+.rich-body .img-tools button {
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #6b6459;
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.rich-body .img-tools button:hover {
+  background: #f2eee7;
+}
+
+.rich-body .img-tools button.on {
+  background: var(--accent);
+  color: #fff;
+}
+
 /* 待办：方框与首行文字对齐 */
 .rich-body ul[data-type='taskList'] {
   padding-left: 0.15em;

@@ -27,14 +27,29 @@ function withMark(marks: Mark[], mark: Mark): Mark[] {
   return [...marks, mark]
 }
 
-/** 图片节点 → Markdown；title 里存宽度像素值 */
+/** 图片节点 → Markdown；title 里存 `宽度 对齐`，如 "480 left" */
 function imgToMd(n: PMNode): string {
   const src = String(n.attrs?.src ?? '')
   const alt = String(n.attrs?.alt ?? '')
-  const w = n.attrs?.width
-  return typeof w === 'number' && w > 0
-    ? `![${alt}](${src} "${w}")`
-    : `![${alt}](${src})`
+  const w = typeof n.attrs?.width === 'number' ? (n.attrs.width as number) : null
+  const align =
+    n.attrs?.align === 'left' || n.attrs?.align === 'right' ? (n.attrs.align as string) : ''
+  const title = [w ?? '', align].join(' ').trim()
+  return title ? `![${alt}](${src} "${title}")` : `![${alt}](${src})`
+}
+
+/** 从 Markdown 图片的 title 反解出宽度与环绕方向 */
+function imgAttrs(alt: string, src: string, title?: string): Record<string, unknown> {
+  const t = (title ?? '').trim()
+  const attrs: Record<string, unknown> = { src, alt }
+  if (!t) return attrs
+  attrs.title = t
+  for (const token of t.split(/\s+/)) {
+    const n = Number(token)
+    if (Number.isFinite(n) && n > 0 && attrs.width === undefined) attrs.width = n
+    if (token === 'left' || token === 'right') attrs.align = token
+  }
+  return attrs
 }
 
 /** 行内语法 → 文本节点数组 */
@@ -72,15 +87,7 @@ export function inlineNodes(src: string, marks: Mark[] = []): PMNode[] {
     m = IMG.exec(rest)
     if (m) {
       flush()
-      const w = m[3] ? Number(m[3]) : NaN
-      out.push({
-        type: 'image',
-        attrs: {
-          src: m[2],
-          alt: m[1],
-          ...(Number.isFinite(w) && w > 0 ? { width: w } : {}),
-        },
-      })
+      out.push({ type: 'image', attrs: imgAttrs(m[1], m[2], m[3]) })
       i += m[0].length
       continue
     }
@@ -247,19 +254,9 @@ export function mdToDoc(src: string): PMNode {
     // 独占一行的图片 → 单独一个段落（图片是行内节点，必须挂在段落里）
     const imgOnly = IMG.exec(line.trim())
     if (imgOnly && imgOnly[0] === line.trim()) {
-      const w = imgOnly[3] ? Number(imgOnly[3]) : NaN
       nodes.push({
         type: 'paragraph',
-        content: [
-          {
-            type: 'image',
-            attrs: {
-              src: imgOnly[2],
-              alt: imgOnly[1],
-              ...(Number.isFinite(w) && w > 0 ? { width: w } : {}),
-            },
-          },
-        ],
+        content: [{ type: 'image', attrs: imgAttrs(imgOnly[1], imgOnly[2], imgOnly[3]) }],
       })
       i += 1
       continue
