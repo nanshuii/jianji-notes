@@ -47,14 +47,21 @@ fi
 
 echo ""
 echo "正在推送到 GitHub ..."
-if git push -u origin "$BRANCH" 2>&1 | grep -v "^$"; then
+# 必须先把输出收进文件再判断退出码。直接 `git push | grep` 会让管道的
+# 退出码变成 grep 的，把推送失败误报成成功。
+PUSH_LOG="$(mktemp)"
+if git push -u origin "$BRANCH" >"$PUSH_LOG" 2>&1; then
+  grep -v '^$' "$PUSH_LOG"
+  rm -f "$PUSH_LOG"
   echo ""
   echo "完成：$REMOTE_URL"
 else
+  grep -v '^$' "$PUSH_LOG"
+  rm -f "$PUSH_LOG"
   echo ""
   echo "推送失败。常见原因："
-  echo "  1. 网络不通 —— 重跑一次本脚本即可（提交已存本地，不会丢）"
+  echo "  1. 网络不通 / HTTP2 报错 —— 重跑一次本脚本即可（提交已存本地，不会丢）"
   echo "  2. 凭据过期 —— 运行 /Users/ledon/.local/bin/gh auth login"
-  echo "  3. 远端有别人的新提交 —— 先执行 git pull --rebase"
+  echo "  3. 远端有别人的新提交 —— 先 git pull --rebase"
   exit 1
 fi
