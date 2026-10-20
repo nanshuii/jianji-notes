@@ -119,8 +119,15 @@ export function snippet(body: string, len = 48): string {
 }
 
 export function wordCount(body: string): number {
-  // 图片那串 base64 不算进字数里
-  const text = body.replace(IMG_MD, '').replace(/\s/g, '')
+  // 去掉图片（那串 base64 不算字数）和 Markdown 标记，接近「净字数」
+  const text = body
+    .replace(IMG_MD, '')
+    .replace(/^#{1,6}\s*/gm, '')
+    .replace(/^>\s?/gm, '')
+    .replace(/^\s*[-*]\s+(\[[ xX]\]\s*)?/gm, '')
+    .replace(/^\s*\d+[.)]\s+/gm, '')
+    .replace(/[*_`~]/g, '')
+    .replace(/\s/g, '')
   return text.length
 }
 

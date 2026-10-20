@@ -9,6 +9,11 @@ src-tauri/gen/schemas/
 build*.log
 *.log
 *.md.tmp
+.tmp/
+dist.bak.*
+dist.old.*
+dist.prev
+src-tauri/.target-fresh/
 
 # 系统文件
 .DS_Store
