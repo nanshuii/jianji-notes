@@ -2,6 +2,58 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "一键上传到 GitHub",
+      "detail": "暂存全部改动 -> 提交 -> 推送。提交信息不填则自动用当前时间。快捷键 ⌘⇧B",
+      "type": "shell",
+      "command": "./scripts/push.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "git",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "一键上传（自定义提交信息）",
+      "detail": "先弹输入框填提交信息，再执行上传",
+      "type": "shell",
+      "command": "./scripts/push.sh '${input:commitMessage}'",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "git",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "查看本地改动",
+      "detail": "只看不提交：列出改了哪些文件（git status + git diff）",
+      "type": "shell",
+      "command": "git --no-pager status --short && echo '' && git --no-pager diff --stat",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "git",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "vite: dev",
       "detail": "启动前端开发服务器（http://localhost:1420），供调试配置复用",
       "type": "shell",
@@ -65,6 +117,14 @@
         "panel": "dedicated",
         "group": "build"
       }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "commitMessage",
+      "type": "promptString",
+      "description": "这次改了什么？（留空则自动用当前时间）",
+      "default": ""
     }
   ]
 }
