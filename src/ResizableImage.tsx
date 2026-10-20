@@ -3,9 +3,9 @@
  *
  * - 拖动：按住图片拖到别的位置（ProseMirror 原生节点拖拽）
  * - 缩放：选中图片后拖右下角圆点，宽度按像素记进节点属性
- * - 环绕：选中后点「左 / 右 / 整行」，文字自动绕排成多行
- *   左 = 图片靠左、文字在右边排；右 = 图片靠右、文字在左边排
- * - 宽度和对齐通过 Markdown 图片语法的 title 存盘：![说明](地址 "480 left")
+ * - 环绕 / 边框 / 翻转：顶部工具栏（ImageToolbar）设置
+ * - 全部样式通过 Markdown 图片语法的 title 存盘：
+ *   ![说明](地址 "480 left #ff0000 2px flipx")
  */
 import { useRef } from 'react'
 import Image from '@tiptap/extension-image'
@@ -13,48 +13,90 @@ import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from '@tip
 
 const MIN_WIDTH = 80
 
-type Align = 'left' | 'right' | null
+export type ImgAlign = 'left' | 'right' | null
 
-/** title 字段 ⇄ 宽度 + 对齐，例如 "480 left" */
-function parseTitle(title: unknown): { width: number | null; align: Align } {
+export type ImgState = {
+  width: number | null
+  align: ImgAlign
+  borderColor: string | null
+  borderWidth: number | null
+  flipx: boolean
+  flipy: boolean
+}
+
+/** title 字段 ⇄ 图片状态，token：宽度 / left|right / #颜色 / Npx / flipx / flipy */
+export function parseImgTitle(title: unknown): ImgState {
   const s = typeof title === 'string' ? title.trim() : ''
-  let width: number | null = null
-  let align: Align = null
+  const st: ImgState = { width: null, align: null, borderColor: null, borderWidth: null, flipx: false, flipy: false }
+  if (!s) return st
   for (const token of s.split(/\s+/)) {
     const n = Number(token)
-    if (Number.isFinite(n) && n > 0 && width === null) width = n
-    if (token === 'left' || token === 'right') align = token
+    if (Number.isFinite(n) && n > 0 && st.width === null) st.width = n
+    if (token === 'left' || token === 'right') st.align = token
+    if (/^#[0-9a-fA-F]{3,8}$/.test(token)) st.borderColor = token
+    const bw = /^(\d+)px$/.exec(token)
+    if (bw) st.borderWidth = Number(bw[1])
+    if (token === 'flipx') st.flipx = true
+    if (token === 'flipy') st.flipy = true
   }
-  return { width, align }
+  return st
 }
 
-function toTitle(width: number | null, align: Align): string {
-  return [width ?? '', align ?? ''].join(' ').trim()
+export function buildImgTitle(st: ImgState): string {
+  return [
+    st.width ?? '',
+    st.align ?? '',
+    st.borderColor ?? '',
+    st.borderWidth && st.borderWidth > 0 ? `${st.borderWidth}px` : '',
+    st.flipx ? 'flipx' : '',
+    st.flipy ? 'flipy' : '',
+  ]
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
-function ImageView({ node, updateAttributes, selected, editor, getPos }: NodeViewProps) {
+/** 编辑器节点当前状态：先取 title，再用 attrs 覆盖 */
+export function readImgState(node: { attrs?: Record<string, unknown> | null }): ImgState {
+  const a = node.attrs ?? {}
+  const t = parseImgTitle(a.title)
+  const width = typeof a.width === 'number' ? (a.width as number) : t.width
+  const align: ImgAlign =
+    a.align === 'left' || a.align === 'right' ? (a.align as ImgAlign) : t.align
+  const borderColor =
+    typeof a.borderColor === 'string' && a.borderColor ? a.borderColor : t.borderColor
+  const borderWidth =
+    typeof a.borderWidth === 'number' ? (a.borderWidth as number) : t.borderWidth
+  return {
+    width,
+    align,
+    borderColor: borderColor ?? null,
+    borderWidth: borderWidth ?? null,
+    flipx: a.flipx === true || t.flipx,
+    flipy: a.flipy === true || t.flipy,
+  }
+}
+
+/** 把整份状态打回节点（attrs + title 同步） */
+export function imgAttrsFrom(st: ImgState): Record<string, unknown> {
+  return {
+    width: st.width,
+    align: st.align,
+    borderColor: st.borderColor,
+    borderWidth: st.borderWidth,
+    flipx: st.flipx,
+    flipy: st.flipy,
+    title: buildImgTitle(st),
+  }
+}
+
+function ImageView({ node, updateAttributes, selected }: NodeViewProps) {
   const imgRef = useRef<HTMLImageElement | null>(null)
   const wrapRef = useRef<HTMLDivElement | null>(null)
+  const st = readImgState(node)
 
-  const parsed = parseTitle(node.attrs.title)
-  const width = typeof node.attrs.width === 'number' ? (node.attrs.width as number) : parsed.width
-  const align: Align =
-    (node.attrs.align === 'left' || node.attrs.align === 'right'
-      ? (node.attrs.align as Align)
-      : null) ?? parsed.align
-
-  /** 把光标放到图片后面那一段，环排完可以直接打字 */
-  const focusAfterImage = () => {
-    const pos = getPos()
-    window.setTimeout(() => {
-      try {
-        const end = pos + node.nodeSize
-        const $pos = editor.state.doc.resolve(Math.min(end + 1, editor.state.doc.content.size))
-        editor.chain().focus($pos.pos).run()
-      } catch {
-        editor.chain().focus('end').run()
-      }
-    }, 30)
+  const apply = (patch: Partial<ImgState>) => {
+    updateAttributes(imgAttrsFrom({ ...st, ...patch }))
   }
 
   const startResize = (e: React.MouseEvent) => {
@@ -78,69 +120,55 @@ function ImageView({ node, updateAttributes, selected, editor, getPos }: NodeVie
       window.removeEventListener('mouseup', up)
       document.body.style.userSelect = ''
       const w = Math.round(Math.max(MIN_WIDTH, Math.min(startW + ev.clientX - startX, maxW)))
-      const next = w >= maxW - 6 ? null : w
-      updateAttributes({ width: next, title: toTitle(next, align) })
+      // 拖到几乎满宽就当没设置过，随窗口自适应
+      apply({ width: w >= maxW - 6 ? null : w })
     }
     window.addEventListener('mousemove', move)
     window.addEventListener('mouseup', up)
   }
 
-  const setAlign = (al: Align) => {
-    // 选左右环绕但还没设过宽度时，给一个默认的半宽
-    let w = width
-    if (al && !w) {
-      const body = wrapRef.current?.closest('.rich-body')
-      w = body ? Math.round(body.getBoundingClientRect().width * 0.5) : 360
-    }
-    updateAttributes({ align: al, width: w, title: toTitle(w, al) })
-    if (al) focusAfterImage()
+  const flips: React.CSSProperties = {}
+  if (st.flipx && st.flipy) flips.transform = 'scale(-1, -1)'
+  else if (st.flipx) flips.transform = 'scaleX(-1)'
+  else if (st.flipy) flips.transform = 'scaleY(-1)'
+
+  const border: React.CSSProperties = {}
+  if (st.borderWidth && st.borderWidth > 0) {
+    border.border = `${st.borderWidth}px solid ${st.borderColor ?? '#3a362e'}`
+    // 翻转不翻边框，边框画在外层
   }
 
   return (
     <NodeViewWrapper
       ref={wrapRef}
-      className={`img-wrap${selected ? ' selected' : ''}${align ? ` img-float-${align}` : ''}`}
+      className={`img-wrap${selected ? ' selected' : ''}${st.align ? ` img-float-${st.align}` : ''}`}
       data-drag-handle
       title="按住拖动可挪位置"
     >
-      <img
-        ref={imgRef}
-        src={String(node.attrs.src ?? '')}
-        alt={String(node.attrs.alt ?? '')}
-        draggable={false}
-        style={width ? { width: `${width}px` } : undefined}
-      />
-      {selected && (
-        <span className="img-tools" contentEditable={false}>
-          <button
-            type="button"
-            className={align === 'left' ? 'on' : ''}
-            title="图片靠左，文字在右边绕排"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => setAlign('left')}
-          >
-            左
-          </button>
-          <button
-            type="button"
-            className={align === 'right' ? 'on' : ''}
-            title="图片靠右，文字在左边绕排"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => setAlign('right')}
-          >
-            右
-          </button>
-          <button
-            type="button"
-            className={align === null ? 'on' : ''}
-            title="独占一行，不环绕"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => setAlign(null)}
-          >
-            整行
-          </button>
-        </span>
-      )}
+      <span
+        className="img-frame"
+        style={{
+          ...border,
+          display: 'inline-block',
+          lineHeight: 0,
+          borderRadius: 8,
+          overflow: 'hidden',
+          transform: flips.transform,
+        }}
+      >
+        <img
+          ref={imgRef}
+          src={String(node.attrs.src ?? '')}
+          alt={String(node.attrs.alt ?? '')}
+          draggable={false}
+          style={{
+            width: st.width ? `${st.width}px` : undefined,
+            transform: border.transform,
+            display: 'block',
+            borderRadius: st.borderWidth && st.borderWidth > 0 ? 0 : 8,
+          }}
+        />
+      </span>
       <span className="img-resize" title="拖动调整大小" onMouseDown={startResize} />
     </NodeViewWrapper>
   )
@@ -151,27 +179,12 @@ export const ResizableImage = Image.extend({
   addAttributes() {
     return {
       ...this.parent?.(),
-      width: {
-        default: null,
-        parseHTML: (el) => {
-          const raw = el.getAttribute('data-width') ?? el.getAttribute('width')
-          const n = raw ? Number(raw) : NaN
-          return Number.isFinite(n) && n > 0 ? n : null
-        },
-        renderHTML: (attrs) =>
-          typeof attrs.width === 'number' ? { 'data-width': attrs.width } : {},
-      },
-      align: {
-        default: null,
-        parseHTML: (el) => {
-          const v = el.getAttribute('data-align')
-          return v === 'left' || v === 'right' ? v : null
-        },
-        renderHTML: (attrs) =>
-          attrs.align === 'left' || attrs.align === 'right'
-            ? { 'data-align': attrs.align }
-            : {},
-      },
+      width: { default: null },
+      align: { default: null },
+      borderColor: { default: null },
+      borderWidth: { default: null },
+      flipx: { default: false },
+      flipy: { default: false },
     }
   },
   addNodeView() {

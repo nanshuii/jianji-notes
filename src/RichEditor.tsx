@@ -4,6 +4,7 @@ import {
   useEffect,
   useImperativeHandle,
   useRef,
+  useState,
 } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import type { Editor } from '@tiptap/core'
@@ -15,6 +16,8 @@ import Placeholder from '@tiptap/extension-placeholder'
 import { ResizableImage } from './ResizableImage'
 import { docToMd, mdToDoc } from './md-doc'
 import { fileToDataUrl } from './image'
+import { ImageToolbar, CropModal } from './ImageToolbar'
+import { NodeSelection } from '@tiptap/pm/state'
 
 export type RichEditorHandle = {
   insertFiles: (files: FileList | File[] | null | undefined) => Promise<void>
@@ -49,6 +52,8 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
   )
   const changeRef = useRef(onChange)
   changeRef.current = onChange
+  // 正在裁剪的图片（弹窗打开时置顶工具栏保持文字态）
+  const [cropSrc, setCropSrc] = useState<string | null>(null)
 
   const editor = useEditor({
     extensions: [
@@ -141,15 +146,31 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
 
   if (!editor) return <div className="rich-loading">正在打开…</div>
 
+  // 选中的是图片时，顶部工具栏换成图片工具；点文字/空白自动切回来
+  const sel = editor.state.selection
+  const imageSelected =
+    sel instanceof NodeSelection && sel.node.type.name === 'image' && !cropSrc
+
   return (
     <div className="rich">
-      <Toolbar
-        editor={editor}
-        onPickImage={() => pickerRef.current?.click()}
-      />
+      {imageSelected ? (
+        <ImageToolbar editor={editor} onCrop={setCropSrc} />
+      ) : (
+        <Toolbar editor={editor} onPickImage={() => pickerRef.current?.click()} />
+      )}
       <div className="paper">
         <EditorContent editor={editor} />
       </div>
+      {cropSrc && (
+        <CropModal
+          src={cropSrc}
+          onCancel={() => setCropSrc(null)}
+          onApply={(dataUrl) => {
+            editor.chain().updateAttributes('image', { src: dataUrl }).run()
+            setCropSrc(null)
+          }}
+        />
+      )}
       <input
         ref={pickerRef}
         type="file"

@@ -27,10 +27,12 @@ function withMark(marks: Mark[], mark: Mark): Mark[] {
   return [...marks, mark]
 }
 
-/** 图片节点 → Markdown；title 里存 `宽度 对齐`，如 "480 left" */
+/** 图片节点 → Markdown；title 里存 `宽度 对齐 #颜色 Npx flipx flipy` 等 token */
 function imgToMd(n: PMNode): string {
   const src = String(n.attrs?.src ?? '')
   const alt = String(n.attrs?.alt ?? '')
+  const t = typeof n.attrs?.title === 'string' ? n.attrs.title.trim() : ''
+  if (t) return `![${alt}](${src} "${t}")`
   const w = typeof n.attrs?.width === 'number' ? (n.attrs.width as number) : null
   const align =
     n.attrs?.align === 'left' || n.attrs?.align === 'right' ? (n.attrs.align as string) : ''
