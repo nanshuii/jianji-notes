@@ -1,0 +1,60 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "前端：Chrome 调试",
+      "type": "pwa-chrome",
+      "request": "launch",
+      "url": "http://localhost:1420",
+      "webRoot": "${workspaceFolder}",
+      "sourceMaps": true,
+      "preLaunchTask": "vite: dev",
+      "presentation": {
+        "group": "前端",
+        "order": 1
+      }
+    },
+    {
+      "name": "前端：只启动不调试（浏览器预览）",
+      "type": "pwa-chrome",
+      "request": "launch",
+      "url": "http://localhost:1420",
+      "webRoot": "${workspaceFolder}",
+      "preLaunchTask": "vite: dev",
+      "presentation": {
+        "group": "前端",
+        "order": 2
+      }
+    },
+    {
+      "name": "Tauri：调试桌面窗口（Rust）",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "--manifest-path=./src-tauri/Cargo.toml", "--no-default-features"],
+        "filter": {
+          "name": "jianji",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "vite: dev",
+      "presentation": {
+        "group": "桌面",
+        "order": 1
+      }
+    },
+    {
+      "name": "Tauri：附加到已运行的应用",
+      "type": "lldb",
+      "request": "attach",
+      "program": "${workspaceFolder}/src-tauri/target/debug/jianji",
+      "pid": "${command:pickMyProcess}",
+      "presentation": {
+        "group": "桌面",
+        "order": 2
+      }
+    }
+  ]
+}

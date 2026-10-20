@@ -1,0 +1,70 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "vite: dev",
+      "detail": "启动前端开发服务器（http://localhost:1420），供调试配置复用",
+      "type": "shell",
+      "command": "npm run dev",
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "vite",
+        "fileLocation": "relative",
+        "pattern": {
+          "regexp": "^(.*):(\\d+):(\\d+):\\s+(error|warning):\\s+(.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*(VITE|vite).*ready in.*|.*Local:.*",
+          "endsPattern": ".*(Local|ready in).*"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "dev"
+      }
+    },
+    {
+      "label": "tauri: dev",
+      "detail": "启动完整的桌面应用（热更新）。tauri 会自己启动 vite，不需要再叠加 vite: dev",
+      "type": "shell",
+      "command": "npm run app:dev",
+      "problemMatcher": ["$rustc"],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "dev"
+      }
+    },
+    {
+      "label": "检查类型",
+      "detail": "tsc --noEmit，只做类型检查不产出文件",
+      "type": "shell",
+      "command": "npx tsc --noEmit",
+      "problemMatcher": ["$tsc"],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "group": "check"
+      }
+    },
+    {
+      "label": "打包 macOS 应用",
+      "detail": "产出 .app 与 .dmg，耗时较长",
+      "type": "shell",
+      "command": "npm run app:build",
+      "problemMatcher": ["$rustc"],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "group": "build"
+      }
+    }
+  ]
+}

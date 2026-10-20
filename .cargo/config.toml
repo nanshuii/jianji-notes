@@ -1,0 +1,10 @@
+# 本项目使用 sparse 协议的镜像索引，避免 git 协议索引更新卡住。
+# 只作用于本目录，不会修改全局 ~/.cargo/config.toml
+[source.crates-io]
+replace-with = "rsproxy-sparse"
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
+[net]
+git-fetch-with-cli = true

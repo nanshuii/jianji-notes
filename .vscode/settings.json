@@ -1,0 +1,38 @@
+{
+  "// 说明": "让 VSCode 别去索引 2.6GB 的 Rust 编译产物，否则搜索和文件监听都会被拖慢",
+  "search.exclude": {
+    "**/src-tauri/target": true,
+    "**/src-tauri/target2": true,
+    "**/dist": true,
+    "**/node_modules": true,
+    "**/build.log": true
+  },
+  "files.watcherExclude": {
+    "**/src-tauri/target/**": true,
+    "**/src-tauri/target2/**": true,
+    "**/dist/**": true,
+    "**/node_modules/**": true
+  },
+  "files.exclude": {
+    "**/.DS_Store": true,
+    "**/src-tauri/target": true,
+    "**/src-tauri/target2": true
+  },
+  "rust-analyzer.cargo.targetDir": true,
+  "rust-analyzer.check.command": "clippy",
+  "rust-analyzer.files.excludeDirs": ["src-tauri/target", "src-tauri/target2"],
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.preferences.importModuleSpecifier": "relative",
+  "editor.formatOnSave": false,
+  "editor.tabSize": 2,
+  "[rust]": {
+    "editor.tabSize": 4,
+    "editor.defaultFormatter": "rust-lang.rust-analyzer"
+  },
+  "[typescript]": {
+    "editor.tabSize": 2
+  },
+  "[typescriptreact]": {
+    "editor.tabSize": 2
+  }
+}
