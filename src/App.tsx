@@ -72,7 +72,8 @@ export default function App() {
   const [scope, setScope] = useState<Scope>(null)
   const [activeFile, setActiveFile] = useState<string | null>(null)
   const [query, setQuery] = useState('')
-  const [preview, setPreview] = useState(false)
+  // 默认打开就是预览态：先读，想改再双击或点「编辑」
+  const [preview, setPreview] = useState(true)
   const [ready, setReady] = useState(false)
   const [location, setLocation] = useState('')
   const [error, setError] = useState('')
@@ -595,7 +596,7 @@ export default function App() {
                 className={`note-item${n.file === activeFile ? ' active' : ''}`}
                 onClick={() => {
                   setActiveFile(n.file)
-                  setPreview(false)
+                  setPreview(true)
                 }}
               >
                 <div className="note-item-top">
@@ -679,9 +680,11 @@ export default function App() {
                   >
                     {active.type === 'list' ? '清单' : '笔记'}
                   </button>
-                  <button className={preview ? 'on' : ''} onClick={() => setPreview((v) => !v)}>
-                    {preview ? '编辑' : '预览'}
-                  </button>
+                  {active.type === 'note' && (
+                    <button className={preview ? 'on' : ''} onClick={() => setPreview((v) => !v)}>
+                      {preview ? '编辑' : '预览'}
+                    </button>
+                  )}
                   <button className="danger" onClick={() => setPendingDelete(active.file)}>
                     删除
                   </button>
@@ -690,13 +693,23 @@ export default function App() {
             </header>
 
             <section className="editor-body">
-              {preview ? (
-                <div
-                  className="markdown"
-                  dangerouslySetInnerHTML={{ __html: mdToHtml(active.body) }}
-                />
-              ) : active.type === 'list' ? (
+              {active.type === 'list' ? (
+                /* 清单本身就是可勾选的可读界面，不走预览/编辑切换 */
                 <ListView note={active} onChange={(body) => patch({ body })} />
+              ) : preview ? (
+                active.body.trim() ? (
+                  <div
+                    className="markdown preview-body"
+                    title="双击进入编辑"
+                    onDoubleClick={() => setPreview(false)}
+                    dangerouslySetInnerHTML={{ __html: mdToHtml(active.body) }}
+                  />
+                ) : (
+                  <div className="preview-empty">
+                    <p>这篇还没有内容</p>
+                    <button onClick={() => setPreview(false)}>开始写</button>
+                  </div>
+                )
               ) : (
                 <textarea
                   className="editor"
@@ -704,6 +717,7 @@ export default function App() {
                   placeholder="从这里开始写…&#10;&#10;支持 Markdown：## 标题、- 列表、- [ ] 待办、**粗体**、`代码`"
                   onChange={(e) => patch({ body: e.target.value })}
                   spellCheck={false}
+                  autoFocus
                 />
               )}
             </section>
