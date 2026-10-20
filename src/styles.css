@@ -839,19 +839,54 @@ button {
   text-underline-offset: 2px;
 }
 
-.rich-body img {
+/* 图片：可拖动挪位，选中后拖右下角圆点缩放 */
+.rich-body .img-wrap {
+  position: relative;
   display: block;
   max-width: 100%;
   margin: 8px 0;
+  line-height: 0;
+  cursor: grab;
+}
+
+.rich-body .img-wrap:active {
+  cursor: grabbing;
+}
+
+.rich-body .img-wrap img {
+  display: block;
+  max-width: 100%;
+  margin: 0;
   border-radius: 8px;
 }
 
-.rich-body img.ProseMirror-selectednode {
+.rich-body .img-wrap.selected img,
+.rich-body .img-wrap:hover img {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
-/* 待办：方框 + 划线 */
+.rich-body .img-resize {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  cursor: ew-resize;
+  transition: opacity 0.12s;
+}
+
+.rich-body .img-wrap:hover .img-resize,
+.rich-body .img-wrap.selected .img-resize {
+  opacity: 0.95;
+}
+
+/* 待办：方框与首行文字对齐 */
 .rich-body ul[data-type='taskList'] {
   padding-left: 0.15em;
   list-style: none;
@@ -863,13 +898,16 @@ button {
   gap: 9px;
 }
 
+/* (行高 1.85em - 方框 15px) / 2，让方框垂直居中于第一行文字 */
 .rich-body ul[data-type='taskList'] li > label {
   flex: 0 0 auto;
-  margin-top: 6px;
+  margin-top: calc((1.85em - 15px) / 2);
   user-select: none;
 }
 
 .rich-body ul[data-type='taskList'] input[type='checkbox'] {
+  display: block;
+  margin: 0;
   width: 15px;
   height: 15px;
   accent-color: var(--accent);

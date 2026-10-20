@@ -1,6 +1,7 @@
 #!/bin/zsh
 # 简记 · 一键打包并安装（macOS）
-# 双击运行即可：用你自己的账户权限编译、装到 ~/Applications、然后打开。
+# 双击运行：编译 → 装到「应用程序」→ 重签名 → 打开 → 提交并推送
+# 日志同时写到终端和 /tmp/jianji-build.log
 
 cd "$(dirname "$0")/.." || exit 1
 export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -10,7 +11,10 @@ echo "  简记 · 打包 $(date '+%H:%M:%S')"
 echo "======================================"
 echo
 
-npm run app:build 2>&1 | tee /tmp/jianji-build.log
+# 必须走 tauri build：它才会设置 TAURI_ENV_* 让前端资源嵌进二进制。
+# 直接用 cargo build 会得到连开发服务器的空壳（表现为白屏）。
+npx tauri build --bundles app \
+  --config '{"build":{"beforeBuildCommand":"npm run build:local"}}' 2>&1 | tee /tmp/jianji-build.log
 CODE=${pipestatus[1]}
 
 if [ "$CODE" -ne 0 ]; then
@@ -31,34 +35,54 @@ if [ ! -d "$APP" ]; then
 fi
 
 echo
-echo "安装到 ~/Applications …"
-pkill -f "简记.app/Contents/MacOS/jianji" 2>/dev/null
+echo "安装 …"
+pkill -f "Contents/MacOS/jianji" 2>/dev/null
 sleep 1
-mkdir -p "$HOME/Applications"
-rm -rf "$HOME/Applications/简记.app"
-cp -R "$APP" "$HOME/Applications/简记.app"
-codesign --force --deep --sign - "$HOME/Applications/简记.app" >/dev/null 2>&1
 
-open "$HOME/Applications/简记.app"
+# 优先装到系统的「应用程序」，没权限就退回家目录的「应用程序」
+DEST="/Applications/简记.app"
+if [ ! -w "/Applications" ]; then
+  mkdir -p "$HOME/Applications"
+  DEST="$HOME/Applications/简记.app"
+fi
+
+rm -rf "$DEST"
+cp -R "$APP" "$DEST" || { echo "复制失败"; read -r; exit 1; }
+codesign --force --deep --sign - "$DEST" >/dev/null 2>&1
+if codesign -v "$DEST" 2>/dev/null; then
+  echo "签名校验通过"
+else
+  echo "警告：签名校验未通过，应用可能打不开"
+fi
+
+open "$DEST"
+
+echo
+echo "重新打 dmg …"
+DMG_DIR="src-tauri/target/release/bundle/dmg"
+mkdir -p "$DMG_DIR"
+DMG="$DMG_DIR/简记_0.1.0_$(uname -m).dmg"
+rm -f "$DMG"
+hdiutil create -volname "简记" -srcfolder "$APP" -ov -format UDZO "$DMG" >/dev/null 2>&1 \
+  && echo "  $DMG" || echo "  dmg 制作失败（不影响使用）"
 
 echo
 echo "提交改动到本地仓库 …"
-if git add -A && git commit -q -m "改成所见即所得编辑：接入富文本编辑器，去掉预览/编辑切换"; then
+if git add -A && git commit -q -m "构建：$(date '+%Y-%m-%d %H:%M')" 2>/dev/null; then
   echo "已提交"
-  if ./scripts/push.sh >/dev/null 2>&1; then
-    echo "已推送到 GitHub"
-  else
-    echo "推送没成功，网络恢复后在项目目录跑 ./scripts/push.sh 即可"
-  fi
 else
   echo "没有需要提交的改动"
+fi
+if ./scripts/push.sh >/dev/null 2>&1; then
+  echo "已推送到 GitHub"
+else
+  echo "推送没成功，网络恢复后在项目目录跑 ./scripts/push.sh 即可"
 fi
 
 echo
 echo "======================================"
-echo "  完成，已经打开：~/Applications/简记.app"
-DMG=$(ls -t src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null | head -1)
-[ -n "$DMG" ] && echo "  安装包：$DMG"
+echo "  完成，已经打开：$DEST"
+echo "  以后从「启动台」或「应用程序」里点「简记」就能用"
 echo "======================================"
 echo
 echo "按回车关闭…"

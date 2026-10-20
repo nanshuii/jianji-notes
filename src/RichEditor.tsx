@@ -8,11 +8,11 @@ import {
 import { EditorContent, useEditor } from '@tiptap/react'
 import type { Editor } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
-import Image from '@tiptap/extension-image'
 import Link from '@tiptap/extension-link'
 import TaskList from '@tiptap/extension-task-list'
 import TaskItem from '@tiptap/extension-task-item'
 import Placeholder from '@tiptap/extension-placeholder'
+import { ResizableImage } from './ResizableImage'
 import { docToMd, mdToDoc } from './md-doc'
 import { fileToDataUrl } from './image'
 
@@ -57,7 +57,7 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
         codeBlock: { HTMLAttributes: { class: 'code' } },
       }),
       Link.configure({ openOnClick: false, autolink: true }),
-      Image.configure({ allowBase64: true, inline: false }),
+      ResizableImage.configure({ allowBase64: true, inline: false }),
       TaskList,
       TaskItem.configure({ nested: true }),
       Placeholder.configure({ placeholder: '从这里开始写…' }),

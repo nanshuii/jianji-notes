@@ -14,7 +14,8 @@ export type PMNode = {
   marks?: Mark[]
 }
 
-const IMG = /^!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?\s*\)/
+// 图片地址后面可以带 "宽度"（像素），如 ![图](data:... "480")
+const IMG = /^!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+"([^"]*)")?\s*\)/
 const LINK = /^\[([^\]]+)\]\(([^)\s]+)\)/
 const CODE = /^`([^`]+)`/
 const BOLD = /^(\*\*|__)(?=\S)([\s\S]+?)(?<=\S)\1/
@@ -24,6 +25,16 @@ const STRIKE = /^~~(?=\S)([\s\S]+?)(?<=\S)~~/
 function withMark(marks: Mark[], mark: Mark): Mark[] {
   if (marks.some((m) => m.type === mark.type)) return marks
   return [...marks, mark]
+}
+
+/** 图片节点 → Markdown；title 里存宽度像素值 */
+function imgToMd(n: PMNode): string {
+  const src = String(n.attrs?.src ?? '')
+  const alt = String(n.attrs?.alt ?? '')
+  const w = n.attrs?.width
+  return typeof w === 'number' && w > 0
+    ? `![${alt}](${src} "${w}")`
+    : `![${alt}](${src})`
 }
 
 /** 行内语法 → 文本节点数组 */
@@ -61,7 +72,15 @@ export function inlineNodes(src: string, marks: Mark[] = []): PMNode[] {
     m = IMG.exec(rest)
     if (m) {
       flush()
-      out.push({ type: 'image', attrs: { src: m[2], alt: m[1] } })
+      const w = m[3] ? Number(m[3]) : NaN
+      out.push({
+        type: 'image',
+        attrs: {
+          src: m[2],
+          alt: m[1],
+          ...(Number.isFinite(w) && w > 0 ? { width: w } : {}),
+        },
+      })
       i += m[0].length
       continue
     }
@@ -226,9 +245,17 @@ export function mdToDoc(src: string): PMNode {
     }
 
     // 独占一行的图片
-    const imgOnly = /^\s*!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?\s*\)\s*$/.exec(line)
-    if (imgOnly) {
-      nodes.push({ type: 'image', attrs: { src: imgOnly[2], alt: imgOnly[1] } })
+    const imgOnly = IMG.exec(line.trim())
+    if (imgOnly && imgOnly[0] === line.trim()) {
+      const w = imgOnly[3] ? Number(imgOnly[3]) : NaN
+      nodes.push({
+        type: 'image',
+        attrs: {
+          src: imgOnly[2],
+          alt: imgOnly[1],
+          ...(Number.isFinite(w) && w > 0 ? { width: w } : {}),
+        },
+      })
       i += 1
       continue
     }
@@ -259,7 +286,7 @@ export function mdToDoc(src: string): PMNode {
 function inlineToMd(nodes: PMNode[] = []): string {
   return nodes
     .map((n) => {
-      if (n.type === 'image') return `![](${String(n.attrs?.src ?? '')})`
+      if (n.type === 'image') return imgToMd(n)
       if (n.type === 'hardBreak') return '\n'
       let t = n.text ?? ''
       if (!t) return ''
@@ -287,7 +314,7 @@ function blockToMd(node: PMNode, depth = 0): string {
     case 'paragraph': {
       const kids = node.content ?? []
       if (kids.length === 1 && kids[0].type === 'image') {
-        return `![](${String(kids[0].attrs?.src ?? '')})`
+        return imgToMd(kids[0])
       }
       return inlineToMd(kids)
     }
@@ -333,7 +360,7 @@ function blockToMd(node: PMNode, depth = 0): string {
         })
         .join('\n')
     case 'image':
-      return `![](${String(node.attrs?.src ?? '')})`
+      return imgToMd(node)
     default:
       return inlineToMd(node.content)
   }

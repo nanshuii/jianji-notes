@@ -675,14 +675,6 @@ export default function App() {
                   >
                     {active.type === 'list' ? '清单' : '笔记'}
                   </button>
-                  {active.type === 'note' && (
-                    <button
-                      onClick={() => richRef.current?.pickImage()}
-                      title="插入图片（也可以直接 ⌘V 粘贴或拖进来）"
-                    >
-                      图片
-                    </button>
-                  )}
                   <button className="danger" onClick={() => setPendingDelete(active.file)}>
                     删除
                   </button>
