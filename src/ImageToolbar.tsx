@@ -26,6 +26,15 @@ export function setImageAttrs(editor: Editor, pos: number, patch: Partial<ImgSta
   const next: ImgState = { ...readImgState(cur), ...patch }
   const tr = editor.state.tr.setNodeMarkup(pos, undefined, { ...cur.attrs, ...imgAttrsFrom(next) })
   editor.view.dispatch(tr)
+  // 改完属性选区可能被折回文字光标，重新选中这张图，工具栏才不会跳回文字态
+  const sel = editor.state.selection
+  if (!(sel instanceof NodeSelection) || sel.from !== pos) {
+    try {
+      editor.commands.setNodeSelection(pos)
+    } catch {
+      /* 位置失效就算了 */
+    }
+  }
   // 诊断用：记录最近一次图片属性操作，排查“点了没反应”时读这条
   try {
     localStorage.setItem('jianji.imgTool', `${new Date().toISOString()} ${JSON.stringify(patch)}`)

@@ -90,7 +90,7 @@ export function imgAttrsFrom(st: ImgState): Record<string, unknown> {
   }
 }
 
-function ImageView({ node, updateAttributes, selected }: NodeViewProps) {
+function ImageView({ node, updateAttributes, selected, editor, getPos }: NodeViewProps) {
   const imgRef = useRef<HTMLImageElement | null>(null)
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const st = readImgState(node)
@@ -144,6 +144,13 @@ function ImageView({ node, updateAttributes, selected }: NodeViewProps) {
       className={`img-wrap${selected ? ' selected' : ''}${st.align ? ` img-float-${st.align}` : ''}`}
       data-drag-handle
       title="按住拖动可挪位置"
+      // 点一下就把自己选中（否则点回图片只会落成文字光标，工具栏切不回来）
+      onClick={(e: React.MouseEvent) => {
+        const pos = getPos()
+        if (typeof pos !== 'number') return
+        e.preventDefault()
+        if (editor.state.selection.from !== pos) editor.commands.setNodeSelection(pos)
+      }}
     >
       <span
         className="img-frame"
