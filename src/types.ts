@@ -104,9 +104,12 @@ export function toFileName(title: string, fallback = '未命名'): string {
   return `${cleaned || fallback}.md`
 }
 
+const IMG_MD = /!\[[^\]]*\]\([^)]*\)/g
+
 export function snippet(body: string, len = 48): string {
   const text = body
     .replace(/^---[\s\S]*?---/, '')
+    .replace(IMG_MD, '[图片]')
     .replace(/^#{1,6}\s*/gm, '')
     .replace(/^- \[[ xX]\]\s*/gm, '')
     .replace(/[*_`>~]/g, '')
@@ -116,7 +119,8 @@ export function snippet(body: string, len = 48): string {
 }
 
 export function wordCount(body: string): number {
-  const text = body.replace(/\s/g, '')
+  // 图片那串 base64 不算进字数里
+  const text = body.replace(IMG_MD, '').replace(/\s/g, '')
   return text.length
 }
 

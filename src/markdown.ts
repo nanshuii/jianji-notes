@@ -1,11 +1,40 @@
 function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
 }
 
-/** 行内样式：粗体、斜体、删除线、行内代码、链接 */
+/**
+ * 只放行安全来源的图片地址：
+ * http(s)、data:image、以及相对路径（如 ./assets/a.png）。
+ * javascript:、vbscript:、data:text/html 之类一律丢掉，避免拼进 innerHTML 后被执行。
+ */
+function safeSrc(raw: string): string {
+  const s = raw.trim()
+  if (/^(https?:|data:image\/)/i.test(s)) return s
+  if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return ''
+  return s
+}
+
+function imgTag(src: string, alt: string, title: string, cls = 'md-img'): string {
+  const safe = safeSrc(src)
+  if (!safe) return `<span class="md-img-bad">[图片地址不受支持]</span>`
+  const t = title ? ` title="${title}"` : ''
+  return `<img class="${cls}" src="${safe}" alt="${alt}"${t} loading="lazy" />`
+}
+
+/** 图片语法 ![](地址)，必须排在链接之前处理，否则感叹号会残留 */
+const IMG_RE = /!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+&quot;([^&]*)&quot;)?\s*\)/g
+
+/** 行内样式：图片、粗体、斜体、删除线、行内代码、链接 */
 export function renderInline(src: string): string {
   let t = esc(src)
   t = t.replace(/`([^`]+)`/g, '<code>$1</code>')
+  t = t.replace(IMG_RE, (_m, alt: string, url: string, title?: string) =>
+    imgTag(url, alt, title ?? ''),
+  )
   t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
   t = t.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
   t = t.replace(/~~([^~]+)~~/g, '<del>$1</del>')
@@ -15,6 +44,9 @@ export function renderInline(src: string): string {
   )
   return t
 }
+
+/** 整行只有一张图片时，渲染成图注形式，比塞在段落里好看 */
+const IMG_ONLY = /^\s*!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?\s*\)\s*$/
 
 const BLOCK_START = /^(#{1,6}\s|>|```|\s*[-*]\s|\s*\d+[.)]\s)/
 
@@ -77,6 +109,24 @@ export function mdToHtml(src: string): string {
         i += 1
       }
       out.push(`<blockquote>${mdToHtml(buf.join('\n'))}</blockquote>`)
+      continue
+    }
+
+    const img = IMG_ONLY.exec(line)
+    if (img) {
+      closeList()
+      const alt = esc(img[1].trim())
+      const url = img[2]
+      if (safeSrc(url)) {
+        out.push(
+          `<figure class="md-figure">${imgTag(esc(url), alt, '')}${
+            alt ? `<figcaption>${alt}</figcaption>` : ''
+          }</figure>`,
+        )
+      } else {
+        out.push('<p><span class="md-img-bad">[图片地址不受支持]</span></p>')
+      }
+      i += 1
       continue
     }
 

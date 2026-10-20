@@ -62,6 +62,48 @@ function byUpdated(a: Note, b: Note): number {
   return Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt
 }
 
+/**
+ * 把图片压一压再转成 data URI，直接内嵌进 Markdown。
+ * 好处是笔记文件自带图片，换电脑、丢网盘、进 Git 都不会掉图；
+ * 代价是文件体积变大，所以长边压到 1600px、WebP 编码。
+ */
+async function fileToDataUrl(file: File, maxSide = 1600): Promise<string> {
+  const raw = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+  // 动图走 canvas 会丢掉动画，原样内嵌
+  if (!file.type.startsWith('image/') || file.type === 'image/gif') return raw
+
+  try {
+    const bitmap = await createImageBitmap(file)
+    const { width, height } = bitmap
+    const scale = Math.min(1, maxSide / Math.max(width, height))
+    if (scale === 1 && raw.length < 900_000) {
+      bitmap.close()
+      return raw
+    }
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.round(width * scale)
+    canvas.height = Math.round(height * scale)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) {
+      bitmap.close()
+      return raw
+    }
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+    bitmap.close()
+    const webp = canvas.toDataURL('image/webp', 0.9)
+    return webp.startsWith('data:image/webp')
+      ? webp
+      : canvas.toDataURL('image/jpeg', 0.88)
+  } catch {
+    return raw
+  }
+}
+
 /** 全部视图用 null，未分类用空串 */
 type Scope = string | null
 
@@ -92,6 +134,8 @@ export default function App() {
   const lastSaved = useRef<Map<string, string>>(new Map())
   const timer = useRef<number | null>(null)
   const searchRef = useRef<HTMLInputElement | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const pickRef = useRef<HTMLInputElement | null>(null)
 
   notesRef.current = notes
 
@@ -300,6 +344,48 @@ export default function App() {
     const note = notesRef.current.find((n) => n.file === activeFile)
     if (note) patch({ pinned: !note.pinned })
   }, [activeFile, patch])
+
+  /* ---------------- 图片 ---------------- */
+  const insertImage = useCallback(
+    async (file: File) => {
+      try {
+        const dataUrl = await fileToDataUrl(file)
+        const note = notesRef.current.find((n) => n.file === activeFile)
+        if (!note) return
+        const body = note.body
+        const el = textareaRef.current
+        const start = el?.selectionStart ?? body.length
+        const end = el?.selectionEnd ?? start
+        const name = file.name.replace(/\.[^.]+$/, '').trim() || '图片'
+        const lead = start > 0 && body[start - 1] !== '\n' ? '\n' : ''
+        const piece = `${lead}![${name}](${dataUrl})\n`
+        patch({ body: body.slice(0, start) + piece + body.slice(end) })
+        setPreview(false)
+        const caret = start + piece.length
+        window.setTimeout(() => {
+          const t = textareaRef.current
+          if (!t) return
+          t.focus()
+          t.setSelectionRange(caret, caret)
+        }, 40)
+      } catch (e) {
+        setError(String(e))
+      }
+    },
+    [activeFile, patch],
+  )
+
+  const takeImages = useCallback(
+    async (list: FileList | null | undefined) => {
+      const files = Array.from(list ?? []).filter((f) => f.type.startsWith('image/'))
+      for (const f of files) {
+        await insertImage(f)
+        // 等 React 把新正文渲染进 textarea，再插下一张，避免互相覆盖
+        await new Promise((r) => setTimeout(r, 120))
+      }
+    },
+    [insertImage],
+  )
 
   /* ---------------- 笔记本操作 ---------------- */
   const applyNotebookRename = useCallback(
@@ -681,6 +767,14 @@ export default function App() {
                     {active.type === 'list' ? '清单' : '笔记'}
                   </button>
                   {active.type === 'note' && (
+                    <button
+                      onClick={() => pickRef.current?.click()}
+                      title="插入图片（也可以直接往正文里粘贴或拖入）"
+                    >
+                      图片
+                    </button>
+                  )}
+                  {active.type === 'note' && (
                     <button className={preview ? 'on' : ''} onClick={() => setPreview((v) => !v)}>
                       {preview ? '编辑' : '预览'}
                     </button>
@@ -712,10 +806,30 @@ export default function App() {
                 )
               ) : (
                 <textarea
+                  ref={textareaRef}
                   className="editor"
                   value={active.body}
-                  placeholder="从这里开始写…&#10;&#10;支持 Markdown：## 标题、- 列表、- [ ] 待办、**粗体**、`代码`"
+                  placeholder="从这里开始写…&#10;&#10;支持 Markdown：## 标题、- 列表、- [ ] 待办、**粗体**、`代码`、![](图片)&#10;截图后直接 ⌘V 粘贴，图片会存进笔记里"
                   onChange={(e) => patch({ body: e.target.value })}
+                  onPaste={(e) => {
+                    const hasImage = Array.from(e.clipboardData?.items ?? []).some((it) =>
+                      it.type.startsWith('image/'),
+                    )
+                    if (!hasImage) return
+                    e.preventDefault()
+                    void takeImages(e.clipboardData.files)
+                  }}
+                  onDragOver={(e) => {
+                    if (Array.from(e.dataTransfer.items).some((i) => i.type.startsWith('image/'))) {
+                      e.preventDefault()
+                      e.dataTransfer.dropEffect = 'copy'
+                    }
+                  }}
+                  onDrop={(e) => {
+                    if (e.dataTransfer.files.length === 0) return
+                    e.preventDefault()
+                    void takeImages(e.dataTransfer.files)
+                  }}
                   spellCheck={false}
                   autoFocus
                 />
@@ -767,6 +881,18 @@ export default function App() {
           onConfirm={(v) => void submitPrompt(v)}
         />
       )}
+
+      <input
+        ref={pickRef}
+        type="file"
+        accept="image/*"
+        multiple
+        hidden
+        onChange={(e) => {
+          void takeImages(e.target.files)
+          e.target.value = ''
+        }}
+      />
     </div>
   )
 }
