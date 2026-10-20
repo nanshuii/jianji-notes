@@ -37,6 +37,30 @@ npm run app:build  # 打包当前平台的安装包
 - macOS：`src-tauri/target/release/bundle/dmg/简记_0.1.0_x64.dmg`（Intel 为 `x64`，Apple Silicon 为 `aarch64`）
 - Windows：`src-tauri/target/release/bundle/nsis/简记_0.1.0_x64-setup.exe`
 
+## 改完代码怎么上传到 GitHub
+
+一条命令，提交信息不填就自动用当前时间：
+
+```bash
+./scripts/push.sh                  # 自动提交信息
+./scripts/push.sh 修好了侧栏搜索     # 自定义提交信息
+```
+
+**VSCode 里更快：按 ⌘⇧B。** 这个快捷键默认就是这个任务，改完代码直接按，终端面板会显示提交了哪些文件、推送结果。
+
+还想要自定义提交信息，用命令面板（⌘⇧P）→ `Tasks: Run Task` → 「一键上传（自定义提交信息）」，会弹输入框。
+
+脚本会自动做四件事：
+
+1. `git add -A` 暂存所有改动
+2. 没有改动就跳过，不会产生空提交
+3. 自动探测网络通道（现有代理 → 直连 → 本机常见代理端口），哪个能连上 GitHub 用哪个
+4. 推送失败自动重试 3 次，仍失败则提示原因，**改动已安全存在本地**
+
+退出码约定：`0` 成功或无需推送，`1` 提交/推送出错，`2` 网络不通（代码已提交本地）。
+
+> 任意项目通用的版本装在 `~/.local/bin/gpush`，在别的仓库里直接敲 `gpush` 即可，行为一致。
+
 ## 在 VSCode 里调试
 
 项目自带 `.vscode/` 配置，打开目录即可用，无需手动建。
