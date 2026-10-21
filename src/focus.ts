@@ -23,7 +23,7 @@ export interface SubTask {
 }
 
 export interface FocusItem {
-  /** YYYY-MM-DD */
+  /** YYYY-MM-DD；空串表示「还没定日期」（新建时默认就是空的） */
   date: string
   title: string
   level: FocusLevel
@@ -146,8 +146,13 @@ export function coerceDate(raw: string, base: string = todayISO()): string {
   return ''
 }
 
+/** 空着就真的是「没定日期」，不再偷偷补今天 */
 function parseDate(raw: string): string {
-  return coerceDate(raw) || todayISO()
+  return coerceDate(raw) || ''
+}
+
+export function hasDate(it: FocusItem): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(it.date)
 }
 
 function parseLevel(raw: string): FocusLevel {
@@ -246,21 +251,20 @@ function serializeSubs(subs: SubTask[]): string {
 }
 
 export function serializeFocus(sheet: FocusSheet): string {
-  const rows = [...sheet.items]
-    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
-    .map((it) => {
-      const row = [
-        it.date,
-        cell(it.title),
-        levelLabel(it.level),
-        statusLabel(it.status),
-        it.steps > 0 ? `${it.progress}/${it.steps}` : '',
-        serializeSubs(it.subs),
-        cell(it.note),
-        cell(it.reason),
-      ]
-      return `| ${row.join(' | ')} |`
-    })
+  // 按「记下来的先后」原样写，不重排：没定日期的那几件才能保持添加顺序
+  const rows = sheet.items.map((it) => {
+    const row = [
+      it.date,
+      cell(it.title),
+      levelLabel(it.level),
+      statusLabel(it.status),
+      it.steps > 0 ? `${it.progress}/${it.steps}` : '',
+      serializeSubs(it.subs),
+      cell(it.note),
+      cell(it.reason),
+    ]
+    return `| ${row.join(' | ')} |`
+  })
   const table = [`| ${HEADER.join(' | ')} |`, `| ${HEADER.map(() => '---').join(' | ')} |`, ...rows]
   return table.join('\n') + (sheet.extra ? `\n\n${sheet.extra}` : '') + '\n'
 }
@@ -284,24 +288,33 @@ export interface FocusMonth {
   open: number
 }
 
-/** 排在前面的优先级：待办 → 失败（要重排） → 已完成 */
+/** 没定日期的那组用空字符串当 key */
+export const NO_DATE = ''
+
+/** 排序优先级：未完成最优先 → 失败第二 → 已完成第三 */
 function statusRank(it: FocusItem): number {
   return it.status === 'open' ? 0 : it.status === 'failed' ? 1 : 2
 }
 
 /**
- * 按月份分组：月份从早到晚（2026年9月、2026年10月…）；
- * 同一个月里未完成的排前面，再按日期从早到晚 —— 打开就能看到「接下来要做什么」。
+ * 按月份分组：没定日期的单独一组排最前面（刚记下来的先看得到），
+ * 有日期的按月份从早到晚（2026年9月、2026年10月…）。
+ * 同一组里：未完成 → 失败 → 已完成，再按日期从早到晚。
  */
 export function groupByMonth(items: FocusItem[]): FocusMonth[] {
   const map = new Map<string, FocusItem[]>()
   for (const it of items) {
-    const list = map.get(monthOf(it.date))
+    const key = hasDate(it) ? monthOf(it.date) : NO_DATE
+    const list = map.get(key)
     if (list) list.push(it)
-    else map.set(monthOf(it.date), [it])
+    else map.set(key, [it])
   }
   return [...map.entries()]
-    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .sort((a, b) => {
+      if (a[0] === NO_DATE) return -1
+      if (b[0] === NO_DATE) return 1
+      return a[0] < b[0] ? -1 : 1
+    })
     .map(([ym, list]) => {
       const sorted = [...list].sort(
         (a, b) =>
@@ -309,7 +322,7 @@ export function groupByMonth(items: FocusItem[]): FocusMonth[] {
       )
       return {
         ym,
-        label: monthTitle(ym),
+        label: ym ? monthTitle(ym) : '未设日期',
         items: sorted,
         open: sorted.filter((i) => i.status === 'open').length,
       }
@@ -361,6 +374,8 @@ export function focusStat(items: FocusItem[]): FocusStat {
       failed += 1
       continue
     }
+    // 没定日期的算不上逾期、也不在「7 天内」
+    if (!hasDate(it)) continue
     const n = daysAway(it.date)
     if (n < 0) overdue += 1
     else if (n <= 7) soon += 1

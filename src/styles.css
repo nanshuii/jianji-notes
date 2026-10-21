@@ -3029,3 +3029,75 @@ button {
   font-size: 12px;
   cursor: pointer;
 }
+
+/* ---------- 日期选择器：事项列表里那个小日期按钮 ---------- */
+
+.dp.inline {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.dp-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 21px;
+  padding: 0 6px 0 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--sub);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dp-trigger:hover,
+.dp-trigger.on {
+  border-color: var(--line);
+  background: #fff;
+  color: var(--text);
+}
+
+.dp-trigger.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.dp-trigger.none {
+  border-style: dashed;
+  border-color: #ddd6cb;
+  color: #b3aca1;
+}
+
+.dp-trigger.none:hover {
+  border-style: solid;
+  border-color: var(--accent);
+  color: var(--accent);
+  background: #fff;
+}
+
+.dp-trigger .dp-caret {
+  font-size: 8px;
+  opacity: 0.7;
+}
+
+.dp-quick .dp-clear {
+  margin-left: auto;
+  border-color: #e8d3cd;
+  color: #a83b28;
+}
+
+.dp-quick .dp-clear:hover {
+  background: rgba(192, 57, 43, 0.08);
+  border-color: #d9b3aa;
+}
+
+.fc-form-hint {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: #b3aca1;
+  font-size: 11px;
+  white-space: nowrap;
+}

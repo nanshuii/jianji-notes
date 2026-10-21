@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { monthTitle, todayISO } from './focus'
+import { dateLabel, monthTitle, todayISO } from './focus'
 
 const WEEK = ['一', '二', '三', '四', '五', '六', '日']
 
@@ -25,6 +25,11 @@ function shiftMonth(ym: string, delta: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`
 }
 
+/** 没定日期时（value 为空）日历就先看当月 */
+function monthOfValue(value: string, fallback: string): string {
+  return /^\d{4}-\d{2}/.test(value) ? value.slice(0, 7) : fallback.slice(0, 7)
+}
+
 /**
  * 自己的日期选择器。
  *
@@ -32,28 +37,44 @@ function shiftMonth(ym: string, delta: number): string {
  * 点起来又慢又容易点错，所以在它旁边换成了「点开就是一个月历」：
  * 点日期 → 弹日历 → 点哪天就是哪天；下面还有今天/明天/后天/一周后。
  * 想手打的也能直接敲 2026-10-21、10-21、21。
+ *
+ * 两种样子：
+ * - `variant='field'`（默认）：带输入框那一版，记账那边的表单用
+ * - `variant='inline'`：事项列表里那一个小小的日期按钮，点开改日期
  */
 export function DatePicker({
   value,
   onChange,
   title = '选择日期',
+  variant = 'field',
+  allowClear = false,
+  emptyLabel = '＋ 日期',
 }: {
   value: string
   onChange: (iso: string) => void
   title?: string
+  variant?: 'field' | 'inline'
+  allowClear?: boolean
+  emptyLabel?: string
 }) {
   const [open, setOpen] = useState(false)
+  const today = todayISO()
   /** 日历正在看哪个月 */
-  const [ym, setYm] = useState(() => value.slice(0, 7))
+  const [ym, setYm] = useState(() => monthOfValue(value, today))
   /** 输入框里的文本（允许手打） */
   const [text, setText] = useState(value)
   const box = useRef<HTMLDivElement | null>(null)
 
+  const openAt = (iso: string) => {
+    setYm(monthOfValue(iso, today))
+    setOpen((v) => !v)
+  }
+
   // 外面改了日期（比如「回到本月」），同步回来
   useEffect(() => {
     setText(value)
-    if (!open) setYm(value.slice(0, 7))
-  }, [value, open])
+    if (!open) setYm(monthOfValue(value, today))
+  }, [value, open, today])
 
   useEffect(() => {
     if (!open) return
@@ -72,8 +93,6 @@ export function DatePicker({
     }
   }, [open])
 
-  const today = todayISO()
-
   const cells = useMemo(() => {
     const [y, m] = ym.split('-').map(Number)
     const lead = (new Date(y, m - 1, 1).getDay() + 6) % 7 // 周一打头
@@ -89,13 +108,19 @@ export function DatePicker({
     setOpen(false)
   }
 
+  const clear = () => {
+    onChange('')
+    setText('')
+    setOpen(false)
+  }
+
   const commitText = () => {
     const raw = text.trim()
     if (!raw || raw === value) {
       setText(value)
       return
     }
-    const [y, m] = value.split('-').map(Number)
+    const [y, m] = (value || today).split('-').map(Number)
     const norm = raw.replace(/[./年月]/g, '-').replace(/日/g, '')
     let iso = ''
     let mt = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(norm)
@@ -124,6 +149,94 @@ export function DatePicker({
 
   const isToday = value === today
 
+  const popup = (
+    <div
+      className="dp-pop"
+      role="dialog"
+      aria-label="选择日期"
+      // 点在日历里不该让输入框失焦（否则会先 commit 再关掉，点不中那天）
+      onMouseDown={(e) => e.preventDefault()}
+    >
+      <div className="dp-head">
+        <button
+          className="dp-nav"
+          data-dir="prev"
+          title="上个月"
+          onClick={() => setYm(shiftMonth(ym, -1))}
+        >
+          ‹
+        </button>
+        <span className="dp-month-label">{monthTitle(ym)}</span>
+        <button
+          className="dp-nav"
+          data-dir="next"
+          title="下个月"
+          onClick={() => setYm(shiftMonth(ym, 1))}
+        >
+          ›
+        </button>
+      </div>
+
+      <div className="dp-week">
+        {WEEK.map((w) => (
+          <span key={w}>{w}</span>
+        ))}
+      </div>
+
+      <div className="dp-grid">
+        {cells.map((iso, i) =>
+          iso ? (
+            <button
+              key={iso}
+              className={`dp-day${iso === value ? ' on' : ''}${iso === today ? ' today' : ''}`}
+              data-date={iso}
+              onClick={() => pick(iso)}
+              title={iso}
+            >
+              {Number(iso.slice(8))}
+            </button>
+          ) : (
+            <span key={`b${i}`} className="dp-day blank" />
+          ),
+        )}
+      </div>
+
+      <div className="dp-quick">
+        {QUICK.map((q) => (
+          <button key={q.label} onClick={() => pick(shift(today, q.n))}>
+            {q.label}
+          </button>
+        ))}
+        {allowClear && value && (
+          <button className="dp-clear" title="不设日期" onClick={clear}>
+            不设日期
+          </button>
+        )}
+      </div>
+    </div>
+  )
+
+  if (variant === 'inline') {
+    return (
+      <div className="dp inline" ref={box}>
+        <button
+          className={`dp-trigger${open ? ' on' : ''}${value ? '' : ' none'}`}
+          title={title}
+          aria-label={title}
+          onClick={() => openAt(value || today)}
+        >
+          {value ? (
+            <span className="dp-trigger-text">{dateLabel(value)}</span>
+          ) : (
+            <span className="dp-trigger-none">{emptyLabel}</span>
+          )}
+          <span className="dp-caret">▾</span>
+        </button>
+        {open && popup}
+      </div>
+    )
+  }
+
   return (
     <div className="dp" ref={box}>
       <div className={`dp-field${open ? ' on' : ''}`}>
@@ -131,10 +244,7 @@ export function DatePicker({
           className="dp-ico"
           title={title}
           aria-label={title}
-          onClick={() => {
-            setYm(value.slice(0, 7))
-            setOpen((v) => !v)
-          }}
+          onClick={() => openAt(value || today)}
         >
           <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <rect x="2" y="3" width="12" height="11" rx="2.5" stroke="currentColor" strokeWidth="1.4" />
@@ -148,7 +258,7 @@ export function DatePicker({
           title="也可以直接输入，比如 2026-10-21 / 10-21 / 21"
           onChange={(e) => setText(e.target.value)}
           onFocus={() => {
-            setYm(value.slice(0, 7))
+            setYm(monthOfValue(value, today))
             setOpen(true)
           }}
           onBlur={commitText}
@@ -168,76 +278,13 @@ export function DatePicker({
           className="dp-caret"
           title={title}
           aria-label={title}
-          onClick={() => {
-            setYm(value.slice(0, 7))
-            setOpen((v) => !v)
-          }}
+          onClick={() => openAt(value || today)}
         >
           ▾
         </button>
       </div>
 
-      {open && (
-        <div
-          className="dp-pop"
-          role="dialog"
-          aria-label="选择日期"
-          // 点在日历里不该让输入框失焦（否则会先 commit 再关掉，点不中那天）
-          onMouseDown={(e) => e.preventDefault()}
-        >
-          <div className="dp-head">
-            <button
-              className="dp-nav"
-              data-dir="prev"
-              title="上个月"
-              onClick={() => setYm(shiftMonth(ym, -1))}
-            >
-              ‹
-            </button>
-            <span className="dp-month-label">{monthTitle(ym)}</span>
-            <button
-              className="dp-nav"
-              data-dir="next"
-              title="下个月"
-              onClick={() => setYm(shiftMonth(ym, 1))}
-            >
-              ›
-            </button>
-          </div>
-
-          <div className="dp-week">
-            {WEEK.map((w) => (
-              <span key={w}>{w}</span>
-            ))}
-          </div>
-
-          <div className="dp-grid">
-            {cells.map((iso, i) =>
-              iso ? (
-                <button
-                  key={iso}
-                  className={`dp-day${iso === value ? ' on' : ''}${iso === today ? ' today' : ''}`}
-                  data-date={iso}
-                  onClick={() => pick(iso)}
-                  title={iso}
-                >
-                  {Number(iso.slice(8))}
-                </button>
-              ) : (
-                <span key={`b${i}`} className="dp-day blank" />
-              ),
-            )}
-          </div>
-
-          <div className="dp-quick">
-            {QUICK.map((q) => (
-              <button key={q.label} onClick={() => pick(shift(today, q.n))}>
-                {q.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      {open && popup}
     </div>
   )
 }

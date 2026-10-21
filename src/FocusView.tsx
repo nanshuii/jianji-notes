@@ -8,11 +8,11 @@ import {
   LEVELS,
   MAX_STEPS,
   MIN_STEPS,
-  dateLabel,
   dayHint,
   daysAway,
   focusStat,
   groupByMonth,
+  hasDate,
   levelIcon,
   levelLabel,
   monthOf,
@@ -44,7 +44,6 @@ export function FocusView({
   const sheet = useMemo(() => parseFocus(note.body), [note.body])
 
   const [title, setTitle] = useState('')
-  const [date, setDate] = useState(todayISO)
   const [level, setLevel] = useState<FocusLevel>('important')
   const [memo, setMemo] = useState('')
   const [flash, setFlash] = useState('')
@@ -115,7 +114,8 @@ export function FocusView({
     }
     const steps = byStep ? stepNum : 0
     const item: FocusItem = {
-      date,
+      // 默认不设日期，记下之后想定哪天再点「＋ 日期」
+      date: '',
       title: name,
       level,
       status: 'open',
@@ -126,7 +126,8 @@ export function FocusView({
       reason: '',
     }
     save([...sheet.items, item])
-    setClosed((prev) => prev.filter((m) => m !== monthOf(date)))
+    // 新记的一定在「未设日期」那组，别让它被收起来看不见
+    setClosed((prev) => prev.filter((m) => m !== ''))
     setTitle('')
     setMemo('')
     setFlash(steps > 0 ? `已记下 · 进度类 ${steps} 步` : '已记下')
@@ -252,7 +253,7 @@ export function FocusView({
               if (e.key === 'Enter') add()
             }}
           />
-          <DatePicker value={date} onChange={setDate} title="这件事哪天要做" />
+          <span className="fc-form-hint">记下后点「＋ 日期」随时定日子</span>
         </div>
 
         <div className="ld-cats">
@@ -370,10 +371,11 @@ export function FocusView({
                   <div className="fc-items">
                     {m.items.map((it) => {
                       const i = sheet.items.indexOf(it)
-                      const away = daysAway(it.date)
+                      const dated = hasDate(it)
+                      const away = dated ? daysAway(it.date) : 0
                       const failed = it.status === 'failed'
                       const done = it.status === 'done'
-                      const overdue = it.status === 'open' && away < 0
+                      const overdue = it.status === 'open' && dated && away < 0
                       const isStep = it.steps > 0
                       const subDone = subDoneCount(it)
                       return (
@@ -411,10 +413,22 @@ export function FocusView({
                             <span className={`fc-level ${it.level}`}>
                               {levelIcon(it.level)} {levelLabel(it.level)}
                             </span>
-                            <span className="fc-item-date">{dateLabel(it.date)}</span>
-                            <span className={`fc-away${overdue ? ' late' : ''}`}>
-                              {done ? '已完成' : failed ? '已失败' : dayHint(it.date)}
-                            </span>
+                            {/* 日期：默认没定，点「＋ 日期」定；定了还能改、能清掉 */}
+                            <DatePicker
+                              variant="inline"
+                              allowClear
+                              value={it.date}
+                              title={dated ? '改日期' : '给这件事定个日期'}
+                              onChange={(iso) => {
+                                patch(i, { date: iso })
+                                if (iso) setClosed((prev) => prev.filter((m) => m !== monthOf(iso)))
+                              }}
+                            />
+                            {dated && (
+                              <span className={`fc-away${overdue ? ' late' : ''}`}>
+                                {done ? '已完成' : failed ? '已失败' : dayHint(it.date)}
+                              </span>
+                            )}
                             <span className="fc-acts">
                               {failed ? (
                                 <button
