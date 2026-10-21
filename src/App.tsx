@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getStorage, isDesktop } from './storage'
 import {
   type Note,
-  type NoteType,
   baseName,
   formatDate,
   listProgress,
@@ -13,7 +12,6 @@ import {
   toFileName,
   wordCount,
 } from './types'
-import { renderInline } from './markdown'
 import { RichEditor, type RichEditorHandle } from './RichEditor'
 import MANUAL_BODY from './manual.md?raw'
 
@@ -25,19 +23,22 @@ const WELCOME_BODY = `欢迎。这是一个完全本地运行的笔记应用，�
 ## 三步上手
 
 - 最左边一栏是**笔记本**，用来把相关的笔记归到一起
-- 中间是当前笔记本里的笔记，点「＋ 笔记」新建
+- 中间是当前笔记本里的笔记，点「＋ 新建笔记」开始写
 - 右边直接写，停手半秒自动保存
+
+## 笔记里也能记待办
+
+不用另外建「清单」：想记待办就点工具条上的 ☑，或者在行首敲 \`- [ ] \`，
+勾掉就完成，正文照样能写别的。
+
+- [x] 装好简记
+- [ ] 点一下左边的圆圈试试
+- [ ] 建一个自己的笔记本
+- [ ] 写一篇图文混排的笔记
 
 想了解全部功能，看同一个文件夹里的《简记操作手册》。
 
 > 没有账号，没有云端，断网也能用。
-`
-
-const WELCOME_LIST_TITLE = '今日清单'
-const WELCOME_LIST_BODY = `- [x] 装好简记
-- [ ] 点一下左边的圆圈试试
-- [ ] 建一个自己的笔记本
-- [ ] 新建一篇自己的笔记
 `
 
 /** 记录「已经初始化过」，避免用户删光笔记后又被塞回一堆示例 */
@@ -115,27 +116,15 @@ export default function App() {
               file: toFileName(MANUAL_TITLE),
               notebook: '',
               title: MANUAL_TITLE,
-              type: 'note',
               body: MANUAL_BODY,
               createdAt: now,
               updatedAt: now,
               pinned: false,
             },
             {
-              file: toFileName(WELCOME_LIST_TITLE),
-              notebook: '',
-              title: WELCOME_LIST_TITLE,
-              type: 'list',
-              body: WELCOME_LIST_BODY,
-              createdAt: now - 1000,
-              updatedAt: now - 1000,
-              pinned: false,
-            },
-            {
               file: toFileName(WELCOME_TITLE),
               notebook: '',
               title: WELCOME_TITLE,
-              type: 'note',
               body: WELCOME_BODY,
               createdAt: now - 2000,
               updatedAt: now - 2000,
@@ -238,10 +227,10 @@ export default function App() {
   )
 
   const createNote = useCallback(
-    async (type: NoteType) => {
+    async () => {
       const nb = scope ?? ''
       const now = Date.now()
-      const base = type === 'list' ? '新的清单' : '新的笔记'
+      const base = '新的笔记'
       const taken = new Set(notesRef.current.map((n) => n.file))
       let name = toFileName(base)
       let i = 2
@@ -254,8 +243,7 @@ export default function App() {
         file,
         notebook: nb,
         title: base,
-        type,
-        body: type === 'list' ? '- [ ] ' : '',
+        body: '',
         createdAt: now,
         updatedAt: now,
         pinned: false,
@@ -372,7 +360,7 @@ export default function App() {
       const key = e.key.toLowerCase()
       if (key === 'n') {
         e.preventDefault()
-        void createNote('note')
+        void createNote()
       } else if (key === 'f') {
         e.preventDefault()
         searchRef.current?.focus()
@@ -419,7 +407,8 @@ export default function App() {
   }, [notes, query, scope])
 
   const active = notes.find((n) => n.file === activeFile) ?? null
-  const progress = active && active.type === 'list' ? listProgress(active.body) : null
+  // 任何一篇正文里有 `- [ ]` 就算有待办，不再是「清单」这种类型专属
+  const progress = active ? listProgress(active.body) : null
 
   const scopeLabel =
     query.trim() ? '搜索结果' : scope === null ? '全部笔记' : scope === '' ? '未分类' : scope
@@ -570,11 +559,8 @@ export default function App() {
         </div>
 
         <div className="new-buttons">
-          <button onClick={() => void createNote('note')} title="⌘N">
-            <span className="plus">＋</span> 笔记
-          </button>
-          <button onClick={() => void createNote('list')}>
-            <span className="plus">＋</span> 清单
+          <button onClick={() => void createNote()} title="⌘N">
+            <span className="plus">＋</span> 新建笔记
           </button>
         </div>
 
@@ -585,7 +571,9 @@ export default function App() {
             </div>
           )}
           {filtered.map((n) => {
-            const p = n.type === 'list' ? listProgress(n.body) : null
+            // 有待办的笔记显示完成数，剩下的照常显示摘要
+            const p = listProgress(n.body)
+            const rest = snippet(n.body)
             return (
               <button
                 key={n.file}
@@ -595,13 +583,15 @@ export default function App() {
                 }}
               >
                 <div className="note-item-top">
-                  <span className={`dot ${n.type}`} />
+                  <span className={`dot${p.total > 0 && p.done < p.total ? ' open' : ''}`} />
                   <span className="note-title">{n.title || '未命名'}</span>
                   {n.pinned && <span className="pin">·</span>}
                   <span className="note-time">{formatDate(n.updatedAt)}</span>
                 </div>
                 <div className="note-sub">
-                  {p && p.total > 0 ? `${p.done}/${p.total} 项完成` : snippet(n.body) || '空白'}
+                  {p.total > 0 && <span className="note-prog">{p.done}/{p.total}</span>}
+                  {p.total > 0 && rest ? ' · ' : ''}
+                  {rest || (p.total > 0 ? '' : '空白')}
                 </div>
                 {query.trim() && (
                   <div className="note-nb">{n.notebook || '未分类'}</div>
@@ -620,7 +610,7 @@ export default function App() {
           <div className="empty">
             <div className="empty-logo">简</div>
             <h2>开始记录</h2>
-            <p>从左边新建一篇笔记，或者写一份今天的清单。</p>
+            <p>从左边新建一篇笔记；想记待办，就在正文里点一下 ☑。</p>
           </div>
         ) : (
           <>
@@ -650,7 +640,7 @@ export default function App() {
                   <span>{wordCount(active.body)} 字</span>
                   {progress && progress.total > 0 && (
                     <span>
-                      {progress.done}/{progress.total} 项
+                      待办 {progress.done}/{progress.total}
                     </span>
                   )}
                   <span className="saved">
@@ -667,14 +657,6 @@ export default function App() {
                   >
                     置顶
                   </button>
-                  <button
-                    onClick={() =>
-                      patch({ type: active.type === 'list' ? 'note' : 'list' })
-                    }
-                    title="切换类型"
-                  >
-                    {active.type === 'list' ? '清单' : '笔记'}
-                  </button>
                   <button className="danger" onClick={() => setPendingDelete(active.file)}>
                     删除
                   </button>
@@ -683,17 +665,12 @@ export default function App() {
             </header>
 
             <section className="editor-body">
-              {active.type === 'list' ? (
-                /* 清单本身就是可勾选的可读界面，不走预览/编辑切换 */
-                <ListView note={active} onChange={(body) => patch({ body })} />
-              ) : (
-                <RichEditor
-                  key={active.file}
-                  ref={richRef}
-                  initial={active.body}
-                  onChange={(body) => patch({ body })}
-                />
-              )}
+              <RichEditor
+                key={active.file}
+                ref={richRef}
+                initial={active.body}
+                onChange={(body) => patch({ body })}
+              />
             </section>
           </>
         )}
@@ -829,112 +806,6 @@ function PromptModal({
             确定
           </button>
         </div>
-      </div>
-    </div>
-  )
-}
-
-/* ---------------- 清单视图 ---------------- */
-
-function ListView({ note, onChange }: { note: Note; onChange: (body: string) => void }) {
-  const [draft, setDraft] = useState('')
-  const lines = note.body.split('\n')
-  const { done, total } = listProgress(note.body)
-
-  const setLine = (idx: number, value: string) => {
-    const next = [...lines]
-    next[idx] = value
-    onChange(next.join('\n'))
-  }
-
-  const toggle = (idx: number) => {
-    const m = /^(\s*)- \[( |x|X)\]\s?/.exec(lines[idx])
-    if (!m) return
-    const mark = m[2].toLowerCase() === 'x' ? ' ' : 'x'
-    setLine(idx, `${m[1]}- [${mark}] ${lines[idx].slice(m[0].length)}`)
-  }
-
-  const editText = (idx: number, text: string) => {
-    const m = /^(\s*)- \[( |x|X)\]\s?/.exec(lines[idx])
-    if (!m) return
-    setLine(idx, `${m[1]}- [${m[2]}] ${text}`)
-  }
-
-  const add = () => {
-    const t = draft.trim()
-    if (!t) return
-    const body = note.body.replace(/\n+$/, '')
-    onChange(`${body}${body ? '\n' : ''}- [ ] ${t}`)
-    setDraft('')
-  }
-
-  const removeAt = (idx: number) => {
-    onChange(lines.filter((_, j) => j !== idx).join('\n'))
-  }
-
-  return (
-    <div className="list-view">
-      {total > 0 && (
-        <div className="progress">
-          <div className="bar">
-            <i style={{ width: `${Math.round((done / total) * 100)}%` }} />
-          </div>
-          <span>
-            {done}/{total}
-          </span>
-        </div>
-      )}
-
-      {lines.map((line, idx) => {
-        const m = /^(\s*)- \[( |x|X)\]\s?(.*)$/.exec(line)
-        if (m) {
-          const checked = m[2].toLowerCase() === 'x'
-          return (
-            <div className={`todo-row${checked ? ' done' : ''}`} key={idx}>
-              <button className="check" onClick={() => toggle(idx)} aria-label="切换完成">
-                {checked ? '✓' : ''}
-              </button>
-              <input
-                value={m[3]}
-                onChange={(e) => editText(idx, e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    const next = [...lines]
-                    next.splice(idx + 1, 0, '- [ ] ')
-                    onChange(next.join('\n'))
-                  }
-                }}
-              />
-              <button className="row-del" onClick={() => removeAt(idx)} title="删除">
-                ×
-              </button>
-            </div>
-          )
-        }
-        if (line.trim() === '') return null
-        return (
-          <div
-            className="list-text"
-            key={idx}
-            dangerouslySetInnerHTML={{ __html: renderInline(line) }}
-          />
-        )
-      })}
-
-      <div className="todo-row add-row">
-        <span className="check ghost">＋</span>
-        <input
-          value={draft}
-          placeholder="添加一项，回车确认"
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault()
-              add()
-            }
-          }}
-        />
       </div>
     </div>
   )

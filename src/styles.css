@@ -370,7 +370,7 @@ button {
 
 .new-buttons {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 8px;
   margin-bottom: 12px;
 }
@@ -483,7 +483,8 @@ button {
   flex: 0 0 auto;
 }
 
-.dot.list {
+/* 还有点没勾完的待办时，小圆点变绿，扫一眼就知道哪几篇没收尾 */
+.dot.open {
   background: var(--green);
 }
 
@@ -516,6 +517,11 @@ button {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.note-prog {
+  color: #3f7a54;
+  font-variant-numeric: tabular-nums;
 }
 
 .list-empty {
@@ -1312,129 +1318,6 @@ button {
   background: #f6ece6;
   color: #a85732;
   font-size: 12.5px;
-}
-
-/* ---------------- 清单视图 ---------------- */
-
-.list-view {
-  max-width: 720px;
-  padding-top: 4px;
-}
-
-.progress {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 16px;
-  font-size: 11.5px;
-  color: var(--sub);
-}
-
-.bar {
-  flex: 1;
-  height: 4px;
-  background: #ebe6de;
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.bar i {
-  display: block;
-  height: 100%;
-  background: var(--green);
-  border-radius: 3px;
-  transition: width 0.25s ease;
-}
-
-.todo-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 4px 6px 4px 0;
-  border-radius: 6px;
-}
-
-.todo-row:hover {
-  background: #f6f3ee;
-}
-
-.check {
-  width: 17px;
-  height: 17px;
-  flex: 0 0 17px;
-  border-radius: 50%;
-  border: 1.5px solid #c9c1b4;
-  background: #fff;
-  color: #fff;
-  font-size: 10px;
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  padding: 0;
-  transition: all 0.15s;
-}
-
-.check:hover {
-  border-color: var(--green);
-}
-
-.todo-row.done .check {
-  background: var(--green);
-  border-color: var(--green);
-}
-
-.todo-row input {
-  flex: 1;
-  border: 0;
-  background: transparent;
-  outline: none;
-  font-size: 14px;
-  color: var(--text);
-  padding: 3px 0;
-  font-family: inherit;
-}
-
-.todo-row.done input {
-  color: #a9a297;
-  text-decoration: line-through;
-}
-
-.row-del {
-  opacity: 0;
-  border: 0;
-  background: transparent;
-  color: #bcb3a5;
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 4px;
-  transition: opacity 0.15s;
-}
-
-.todo-row:hover .row-del {
-  opacity: 1;
-}
-
-.add-row {
-  margin-top: 6px;
-}
-
-.add-row .check.ghost {
-  border-style: dashed;
-  color: #c3bbac;
-  font-size: 11px;
-  cursor: default;
-}
-
-.add-row input::placeholder {
-  color: #b5ada1;
-}
-
-.list-text {
-  font-size: 13.5px;
-  padding: 5px 0;
-  color: #55504a;
-  margin-left: 27px;
 }
 
 /* ---------------- 其他 ---------------- */

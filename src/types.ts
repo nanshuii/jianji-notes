@@ -1,5 +1,3 @@
-export type NoteType = 'note' | 'list'
-
 export interface Note {
   /**
    * 相对笔记根目录的路径，用 / 分隔：
@@ -9,7 +7,6 @@ export interface Note {
   /** 所属笔记本，空字符串表示未分类（文件直接放在根目录） */
   notebook: string
   title: string
-  type: NoteType
   body: string
   createdAt: number
   updatedAt: number
@@ -71,7 +68,6 @@ export function parseNote(file: string, content: string): Note {
     file,
     notebook: notebookOf(file),
     title: meta.title || firstHeading(body) || stripExt(file) || '未命名',
-    type: meta.type === 'list' ? 'list' : 'note',
     body: body.replace(/^\n+/, ''),
     createdAt: Number.isNaN(created) ? Date.now() : created,
     updatedAt: Number.isNaN(updated) ? Date.now() : updated,
@@ -83,7 +79,6 @@ export function serializeNote(note: Note): string {
   const head = [
     '---',
     `title: ${note.title.replace(/\n/g, ' ')}`,
-    `type: ${note.type}`,
     `created: ${new Date(note.createdAt).toISOString()}`,
     `updated: ${new Date(note.updatedAt).toISOString()}`,
     `pinned: ${note.pinned}`,
@@ -152,7 +147,7 @@ export function formatDate(ts: number): string {
   return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`
 }
 
-/** 清单进度：已完成 / 总数 */
+/** 待办进度：已完成 / 总数。笔记和清单是同一篇东西，正文里有多少 `- [ ]` 就统计多少 */
 export function listProgress(body: string): { done: number; total: number } {
   const lines = body.split('\n')
   let done = 0
