@@ -70,7 +70,9 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
       Placeholder.configure({ placeholder: '从这里开始写…' }),
     ],
     content: mdToDoc(initial),
-    autofocus: 'end',
+    // 不在挂载时抢焦点：新建笔记由父组件显式 focus，
+    // 否则编辑器一旦重建就会把光标从标题输入框里抢走
+    autofocus: false,
     editorProps: {
       attributes: { class: 'rich-body', spellcheck: 'false' },
       handlePaste(_view, event) {

@@ -9,6 +9,7 @@ import {
   parseNote,
   serializeNote,
   snippet,
+  stampTitle,
   toFileName,
   wordCount,
 } from './types'
@@ -67,12 +68,17 @@ function byUpdated(a: Note, b: Note): number {
 /** 全部视图用 null，未分类用空串 */
 type Scope = string | null
 
+/** 列表项 / 编辑器头部要显示的派生信息，按正文缓存 */
+type NoteStat = { sub: string; done: number; total: number; words: number }
+
 export default function App() {
   const storage = useMemo(() => getStorage(), [])
   const [notes, setNotes] = useState<Note[]>([])
   const [notebooks, setNotebooks] = useState<string[]>([])
   const [scope, setScope] = useState<Scope>(null)
   const [activeFile, setActiveFile] = useState<string | null>(null)
+  /** 编辑器实例的 key：只在真正换一篇笔记时 +1，文件名变了也不重挂载 */
+  const [docSeq, setDocSeq] = useState(0)
   const [query, setQuery] = useState('')
   const [ready, setReady] = useState(false)
   const [location, setLocation] = useState('')
@@ -93,8 +99,15 @@ export default function App() {
   const timer = useRef<number | null>(null)
   const searchRef = useRef<HTMLInputElement | null>(null)
   const richRef = useRef<RichEditorHandle | null>(null)
+  const activeFileRef = useRef<string | null>(null)
+  /**
+   * 正文摘要是按全量字符串算的（长笔记里塞了图，一次要扫几百 KB），
+   * 每敲一个字都重算就会卡。按 body 内容做缓存，内容不变就直接复用。
+   */
+  const statCache = useRef<Map<string, NoteStat>>(new Map())
 
   notesRef.current = notes
+  activeFileRef.current = activeFile
 
   /* ---------------- 首次加载 ---------------- */
   useEffect(() => {
@@ -147,6 +160,7 @@ export default function App() {
         setNotes(loaded)
         setNotebooks(nbs)
         setActiveFile(loaded[0]?.file ?? null)
+        setDocSeq((v) => v + 1)
         setLocation(dir)
       } catch (e) {
         if (!cancelled) setError(String(e))
@@ -160,19 +174,24 @@ export default function App() {
   }, [storage])
 
   /* ---------------- 持久化 ---------------- */
+  /**
+   * 保存一篇笔记。
+   * renameByTitle=false（自动保存）时只写回当前文件，不按标题改名 ——
+   * 否则边打标题边改名会让编辑器跟着换 key 重挂载，光标被抢走、滚动跳回顶部。
+   * 真正的改名由 commitTitle（标题失焦 / ⌘S / 切换笔记）触发一次。
+   */
   const persist = useCallback(
-    async (note: Note) => {
+    async (note: Note, renameByTitle = false) => {
       const content = serializeNote(note)
 
-      // 目标路径 = 笔记本 + 按标题生成的文件名（同笔记本内去重）
       const taken = new Set(
         notesRef.current.filter((n) => n.file !== note.file).map((n) => n.file),
       )
-      const base = toFileName(note.title)
-      let name = base
+      const wanted = renameByTitle ? toFileName(note.title) : baseName(note.file)
+      let name = wanted
       let i = 2
-      while (taken.has(notePath(note.notebook, name))) {
-        name = `${base.replace(/\.md$/i, '')} ${i}.md`
+      while (name !== baseName(note.file) && taken.has(notePath(note.notebook, name))) {
+        name = `${wanted.replace(/\.md$/i, '')} ${i}.md`
         i += 1
       }
       const desired = notePath(note.notebook, name)
@@ -203,6 +222,14 @@ export default function App() {
     [storage],
   )
 
+  /** 标题改完了：这时候才把文件改成和标题同名 */
+  const commitTitle = useCallback(() => {
+    const note = notesRef.current.find((n) => n.file === activeFileRef.current)
+    if (!note) return
+    if (toFileName(note.title) === baseName(note.file)) return
+    void persist(note, true)
+  }, [persist])
+
   useEffect(() => {
     if (!ready || !activeFile) return
     const note = notes.find((n) => n.file === activeFile)
@@ -214,7 +241,57 @@ export default function App() {
     }
   }, [notes, activeFile, ready, persist])
 
+  // 切走窗口/关窗前把没落盘的改动（含标题改名）冲一次
+  useEffect(() => {
+    const flush = () => {
+      const note = notesRef.current.find((n) => n.file === activeFileRef.current)
+      if (note) void persist(note, true)
+    }
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') flush()
+    }
+    window.addEventListener('beforeunload', flush)
+    window.addEventListener('blur', flush)
+    document.addEventListener('visibilitychange', onHide)
+    return () => {
+      window.removeEventListener('beforeunload', flush)
+      window.removeEventListener('blur', flush)
+      document.removeEventListener('visibilitychange', onHide)
+    }
+  }, [persist])
+
   /* ---------------- 笔记操作 ---------------- */
+  /** 切换打开的笔记：先把上一篇存了，再换 key 重挂载编辑器 */
+  const openNote = useCallback(
+    (file: string | null) => {
+      const prev = notesRef.current.find((n) => n.file === activeFileRef.current)
+      if (prev && prev.file !== file) {
+        if (timer.current) window.clearTimeout(timer.current)
+        timer.current = null
+        void persist(prev, true) // 切走前顺手把改过的标题落成文件名
+      }
+      setActiveFile(file)
+      setDocSeq((v) => v + 1)
+    },
+    [persist],
+  )
+
+  const statsOf = useCallback((body: string): NoteStat => {
+    const cache = statCache.current
+    const hit = cache.get(body)
+    if (hit) return hit
+    const p = listProgress(body)
+    const stat: NoteStat = {
+      sub: snippet(body),
+      done: p.done,
+      total: p.total,
+      words: wordCount(body),
+    }
+    if (cache.size > 400) cache.clear() // 防止反复编辑时无限堆积
+    cache.set(body, stat)
+    return stat
+  }, [])
+
   const patch = useCallback(
     (fields: Partial<Note>) => {
       setNotes((prev) =>
@@ -230,7 +307,8 @@ export default function App() {
     async () => {
       const nb = scope ?? ''
       const now = Date.now()
-      const base = '新的笔记'
+      // 默认标题就是当前时间（年月日时分秒），撞名了加序号
+      const base = stampTitle(now)
       const taken = new Set(notesRef.current.map((n) => n.file))
       let name = toFileName(base)
       let i = 2
@@ -255,13 +333,13 @@ export default function App() {
         setError(String(e))
       }
       setNotes((prev) => [note, ...prev])
-      setActiveFile(file)
+      openNote(file)
       // 在「全部」里新建会落到未分类，把视图跟过去，免得找不到
       if (scope === null) setScope('')
       setQuery('')
       window.setTimeout(() => richRef.current?.focus(), 60)
     },
-    [storage, scope],
+    [storage, scope, openNote],
   )
 
   const removeNote = useCallback(
@@ -275,6 +353,7 @@ export default function App() {
       const rest = notesRef.current.filter((n) => n.file !== file)
       setNotes(rest)
       setActiveFile(rest[0]?.file ?? null)
+      setDocSeq((v) => v + 1)
       setPendingDelete(null)
     },
     [storage],
@@ -367,7 +446,7 @@ export default function App() {
       } else if (key === 's') {
         e.preventDefault()
         const note = notesRef.current.find((n) => n.file === activeFile)
-        if (note) void persist(note)
+        if (note) void persist(note, true)
       } else if (key === '\\') {
         e.preventDefault()
         setRailOpen((v) => !v)
@@ -408,7 +487,7 @@ export default function App() {
 
   const active = notes.find((n) => n.file === activeFile) ?? null
   // 任何一篇正文里有 `- [ ]` 就算有待办，不再是「清单」这种类型专属
-  const progress = active ? listProgress(active.body) : null
+  const activeStat = active ? statsOf(active.body) : null
 
   const scopeLabel =
     query.trim() ? '搜索结果' : scope === null ? '全部笔记' : scope === '' ? '未分类' : scope
@@ -571,27 +650,28 @@ export default function App() {
             </div>
           )}
           {filtered.map((n) => {
-            // 有待办的笔记显示完成数，剩下的照常显示摘要
-            const p = listProgress(n.body)
-            const rest = snippet(n.body)
+            // 有待办的笔记显示完成数，剩下的照常显示摘要（都走缓存，不每次重算）
+            const st = statsOf(n.body)
             return (
               <button
                 key={n.file}
                 className={`note-item${n.file === activeFile ? ' active' : ''}`}
-                onClick={() => {
-                  setActiveFile(n.file)
-                }}
+                onClick={() => openNote(n.file)}
               >
                 <div className="note-item-top">
-                  <span className={`dot${p.total > 0 && p.done < p.total ? ' open' : ''}`} />
+                  <span className={`dot${st.total > 0 && st.done < st.total ? ' open' : ''}`} />
                   <span className="note-title">{n.title || '未命名'}</span>
                   {n.pinned && <span className="pin">·</span>}
                   <span className="note-time">{formatDate(n.updatedAt)}</span>
                 </div>
                 <div className="note-sub">
-                  {p.total > 0 && <span className="note-prog">{p.done}/{p.total}</span>}
-                  {p.total > 0 && rest ? ' · ' : ''}
-                  {rest || (p.total > 0 ? '' : '空白')}
+                  {st.total > 0 && (
+                    <span className="note-prog">
+                      {st.done}/{st.total}
+                    </span>
+                  )}
+                  {st.total > 0 && st.sub ? ' · ' : ''}
+                  {st.sub || (st.total > 0 ? '' : '空白')}
                 </div>
                 {query.trim() && (
                   <div className="note-nb">{n.notebook || '未分类'}</div>
@@ -620,6 +700,14 @@ export default function App() {
                 value={active.title}
                 placeholder="标题"
                 onChange={(e) => patch({ title: e.target.value })}
+                // 改名放在失焦时做一次，边打边改文件名会把编辑器重挂载、光标被抢走
+                onBlur={commitTitle}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    e.currentTarget.blur()
+                  }
+                }}
               />
               <div className="head-row">
                 <div className="meta">
@@ -637,10 +725,10 @@ export default function App() {
                     ))}
                   </select>
                   <span>{formatDate(active.updatedAt)}</span>
-                  <span>{wordCount(active.body)} 字</span>
-                  {progress && progress.total > 0 && (
+                  <span>{activeStat?.words ?? 0} 字</span>
+                  {activeStat && activeStat.total > 0 && (
                     <span>
-                      待办 {progress.done}/{progress.total}
+                      待办 {activeStat.done}/{activeStat.total}
                     </span>
                   )}
                   <span className="saved">
@@ -666,7 +754,7 @@ export default function App() {
 
             <section className="editor-body">
               <RichEditor
-                key={active.file}
+                key={docSeq}
                 ref={richRef}
                 initial={active.body}
                 onChange={(body) => patch({ body })}

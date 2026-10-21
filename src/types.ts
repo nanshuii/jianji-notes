@@ -88,8 +88,16 @@ export function serializeNote(note: Note): string {
   return head + note.body.replace(/\n+$/, '') + '\n'
 }
 
-/** 标题转文件名：去掉非法字符，限制长度，保证以 .md 结尾 */
-export function toFileName(title: string, fallback = '未命名'): string {
+/** 新建笔记的默认标题：年月日时分秒，如 20261021105655 */
+export function stampTitle(ts: number = Date.now()): string {
+  const d = new Date(ts)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(
+    d.getMinutes(),
+  )}${p(d.getSeconds())}`
+}
+
+/** 标题转文件名：去掉非法字符，限制长度，保证以 .md 结尾 */export function toFileName(title: string, fallback = '未命名'): string {
   const cleaned = title
     .replace(/[/\\:*?"<>|]/g, ' ')
     .replace(/[\u0000-\u001f]/g, '')
