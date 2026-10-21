@@ -201,7 +201,6 @@ function ColorButton({
   sel: NonNullable<ReturnType<typeof selectedImage>>
   st: ImgState
 }) {
-  const inputRef = useRef<HTMLInputElement | null>(null)
   const [open, setOpen] = useState(false)
 
   const pick = (color: string) => {
@@ -234,25 +233,8 @@ function ColorButton({
               onClick={() => pick(c)}
             />
           ))}
-          <button
-            type="button"
-            className="custom"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => inputRef.current?.click()}
-          >
-            自定义…
-          </button>
         </div>
       )}
-      <input
-        ref={inputRef}
-        type="color"
-        hidden
-        value={st.borderColor ?? '#3a362e'}
-        onChange={(e) => {
-          pick(e.target.value)
-        }}
-      />
     </>
   )
 }
