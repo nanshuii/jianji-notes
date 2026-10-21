@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Note } from './types'
+import { DatePicker } from './DatePicker'
 import {
   type Entry,
   type EntryType,
@@ -218,12 +219,7 @@ export function LedgerView({
               if (e.key === 'Enter') add()
             }}
           />
-          <input
-            type="date"
-            className="ld-date"
-            value={date}
-            onChange={(e) => setDate(e.target.value || todayISO())}
-          />
+          <DatePicker value={date} onChange={setDate} title="这笔是哪天的" />
         </div>
 
         <div className="ld-cats">

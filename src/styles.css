@@ -2248,9 +2248,15 @@ button {
 
 /* ================= 重要事项 ================= */
 
-/* 重要事项的总览是 4 个格子：共 / 待办 / 逾期 / 7 天内 */
+/* 重要事项的总览：共 / 待办 / 逾期 / 7 天内（有失败时再多一格），用 flex 让它一行排开 */
 .focus .ld-sum {
-  grid-template-columns: repeat(4, 1fr);
+  display: flex;
+  gap: 10px;
+}
+
+.focus .ld-sum-cell {
+  flex: 1;
+  min-width: 0;
 }
 
 .focus .ld-sum b {
@@ -2328,12 +2334,19 @@ button {
 
 .fc-item {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 7px;
   padding: 9px 12px;
   background: #fff;
   border: 1px solid var(--line);
   border-radius: 10px;
+}
+
+/* 第一行：勾 + 标题 + 各种徽标 + 操作 */
+.fc-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .fc-item.done {
@@ -2440,4 +2453,579 @@ button {
 /* 完成按钮在 hover 前也要看得见 */
 .fc-item:hover .ld-item-del {
   opacity: 1;
+}
+
+/* ================= 日期选择器（替代系统滚轮） ================= */
+
+.dp {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.dp-field {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 6px 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--sub);
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.dp-field:hover {
+  border-color: #d8d0c4;
+}
+
+.dp-field.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.dp-ico,
+.dp-caret {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--sub);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.dp-ico:hover,
+.dp-caret:hover {
+  color: var(--accent);
+}
+
+.dp-caret {
+  font-size: 9px;
+  padding-left: 1px;
+}
+
+.dp-text {
+  width: 74px;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dp-now {
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: #9c4a2c;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.dp-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  width: 234px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 14px 34px rgba(37, 35, 31, 0.15), 0 2px 6px rgba(37, 35, 31, 0.06);
+}
+
+.dp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.dp-month-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dp-nav {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--sub);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dp-nav:hover {
+  background: var(--panel);
+  color: var(--text);
+}
+
+.dp-week {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+}
+
+.dp-week span {
+  padding: 2px 0;
+  text-align: center;
+  font-size: 10.5px;
+  color: var(--sub);
+}
+
+.dp-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.dp-day {
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.dp-day:hover {
+  background: var(--panel);
+}
+
+.dp-day.today {
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px #e8c9b9;
+}
+
+.dp-day.on {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: none;
+}
+
+.dp-day.blank {
+  cursor: default;
+}
+
+.dp-quick {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.dp-quick button {
+  flex: 1 1 0;
+  height: 24px;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--text);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.dp-quick button:hover {
+  border-color: #d8d0c4;
+  background: var(--panel);
+}
+
+.dp-quick button:last-child {
+  color: #9c4a2c;
+  border-color: #e8c9b9;
+  background: var(--accent-soft);
+}
+
+/* ================= 进度类事项 / 子事项 / 失败 ================= */
+
+.fc-opts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.fc-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px dashed var(--line);
+  border-radius: 13px;
+  background: #fff;
+  color: var(--sub);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.fc-opt:hover {
+  border-color: #d8d0c4;
+}
+
+.fc-opt.on {
+  border-style: solid;
+  border-color: #e8c9b9;
+  background: var(--accent-soft);
+  color: #9c4a2c;
+}
+
+.fc-opt-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border: 1.5px solid #cfc8bd;
+  border-radius: 4px;
+  font-size: 9px;
+  line-height: 1;
+  color: #fff;
+}
+
+.fc-opt.on .fc-opt-box {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.fc-steps-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--sub);
+  font-size: 12px;
+}
+
+.fc-step-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--sub);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.fc-step-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.fc-steps-num {
+  width: 34px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: center;
+  outline: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.fc-steps-num:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.fc-steps-hint {
+  color: #b3aca1;
+  font-size: 10.5px;
+}
+
+.fc-prog-num {
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.fc-prog-num.full {
+  background: #eef3ea;
+  color: #5c7346;
+}
+
+.fc-sub-num {
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: #f4f2ed;
+  color: var(--sub);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.fc-acts {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.fc-fail,
+.fc-undo {
+  height: 18px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #b3aca1;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0.45;
+  transition: opacity 0.12s;
+}
+
+.fc-item:hover .fc-fail,
+.fc-item:hover .fc-undo {
+  opacity: 1;
+}
+
+.fc-fail:hover {
+  background: rgba(192, 57, 43, 0.09);
+  color: #c0392b;
+}
+
+.fc-undo:hover {
+  background: var(--panel);
+  color: var(--text);
+}
+
+/* 进度格：一格一格点过去 */
+.fc-steps {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-left: 28px;
+}
+
+.fc-step {
+  width: 13px;
+  height: 13px;
+  padding: 0;
+  border: 1.5px solid #d9d2c6;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s, transform 0.1s;
+}
+
+.fc-step:hover {
+  border-color: var(--accent);
+  transform: scale(1.15);
+}
+
+.fc-step.on {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.fc-step.last {
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.fc-steps .fc-steps-hint {
+  margin-left: 4px;
+}
+
+/* 子事项 */
+.fc-subs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 28px;
+}
+
+.fc-sub {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 24px;
+  padding: 0 4px;
+  border-radius: 6px;
+}
+
+.fc-sub:hover {
+  background: #faf8f5;
+}
+
+.fc-sub-check {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1.5px solid #d9d2c6;
+  border-radius: 4px;
+  background: #fff;
+  color: #fff;
+  font-size: 8px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.fc-sub.done .fc-sub-check {
+  border-color: var(--green);
+  background: var(--green);
+}
+
+.fc-sub-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fc-sub.done .fc-sub-title {
+  color: var(--sub);
+  text-decoration: line-through;
+}
+
+.fc-sub-del {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: #b3aca1;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.fc-sub:hover .fc-sub-del {
+  opacity: 1;
+}
+
+.fc-sub-del:hover {
+  background: rgba(192, 57, 43, 0.09);
+  color: #c0392b;
+}
+
+.fc-sub-add {
+  align-self: flex-start;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px dashed var(--line);
+  border-radius: 11px;
+  background: transparent;
+  color: var(--sub);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.fc-sub-add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.fc-sub-input {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: #fff;
+  font-size: 12px;
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* 失败 */
+.fc-item.failed {
+  border-color: #ecd9d5;
+  background: #fdfaf9;
+}
+
+.fc-item.failed .fc-item-title {
+  color: #a83b28;
+}
+
+.fc-item.failed .fc-check {
+  border-color: #e0b7ae;
+  background: #f7e6e2;
+  color: #c0392b;
+}
+
+.fc-failed-num {
+  color: #c0392b;
+}
+
+.fc-reason {
+  padding-left: 28px;
+  color: #a83b28;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.fc-fail-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 28px;
+}
+
+.fc-fail-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: #fff;
+  font-size: 12px;
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.fc-fail-ok {
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 7px;
+  background: #c0392b;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.fc-fail-cancel {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--sub);
+  font-size: 12px;
+  cursor: pointer;
 }
