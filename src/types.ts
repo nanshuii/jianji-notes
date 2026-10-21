@@ -11,6 +11,18 @@ export interface Note {
   createdAt: number
   updatedAt: number
   pinned: boolean
+  /** 用户自己起的标记（标签）。普通笔记默认没有 */
+  tags: string[]
+  /** 是不是记账笔记：打开时走记账界面，正文存一张 Markdown 表格 */
+  ledger: boolean
+}
+
+/** 记账笔记固定带的标记，不写进 tags，避免用户误删后类型混乱 */
+export const LEDGER_TAG = '记账'
+
+/** 一篇笔记对外展示的全部标记：内置的记账标记 + 自定义标记 */
+export function allTags(note: Note): string[] {
+  return note.ledger ? [LEDGER_TAG, ...note.tags.filter((t) => t !== LEDGER_TAG)] : note.tags
 }
 
 export interface RawFile {
@@ -46,6 +58,18 @@ function stripExt(name: string): string {
   return baseName(name).replace(/\.md$/i, '')
 }
 
+/** 逗号分隔的标记串 → 数组（也兼容中文逗号、空格） */
+export function splitTags(raw: string): string[] {
+  return [
+    ...new Set(
+      raw
+        .split(/[,，]/)
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+  ]
+}
+
 export function parseNote(file: string, content: string): Note {
   const meta: Record<string, string> = {}
   let body = content.replace(/\r\n/g, '\n')
@@ -63,6 +87,7 @@ export function parseNote(file: string, content: string): Note {
 
   const created = Date.parse(meta.created ?? '')
   const updated = Date.parse(meta.updated ?? '')
+  const tags = splitTags(meta.tags ?? '').filter((t) => t !== LEDGER_TAG)
 
   return {
     file,
@@ -72,20 +97,24 @@ export function parseNote(file: string, content: string): Note {
     createdAt: Number.isNaN(created) ? Date.now() : created,
     updatedAt: Number.isNaN(updated) ? Date.now() : updated,
     pinned: meta.pinned === 'true',
+    tags,
+    ledger: meta.ledger === 'true',
   }
 }
 
 export function serializeNote(note: Note): string {
-  const head = [
+  const lines = [
     '---',
     `title: ${note.title.replace(/\n/g, ' ')}`,
     `created: ${new Date(note.createdAt).toISOString()}`,
     `updated: ${new Date(note.updatedAt).toISOString()}`,
     `pinned: ${note.pinned}`,
-    '---',
-    '',
-  ].join('\n')
-  return head + note.body.replace(/\n+$/, '') + '\n'
+  ]
+  // 没标记、不是记账的普通笔记，不往 frontmatter 里塞空字段
+  if (note.tags.length > 0) lines.push(`tags: ${note.tags.join(', ')}`)
+  if (note.ledger) lines.push('ledger: true')
+  lines.push('---', '')
+  return lines.join('\n') + note.body.replace(/\n+$/, '') + '\n'
 }
 
 /** 新建笔记的默认标题：年月日时分秒，如 20261021105655 */
@@ -97,7 +126,8 @@ export function stampTitle(ts: number = Date.now()): string {
   )}${p(d.getSeconds())}`
 }
 
-/** 标题转文件名：去掉非法字符，限制长度，保证以 .md 结尾 */export function toFileName(title: string, fallback = '未命名'): string {
+/** 标题转文件名：去掉非法字符，限制长度，保证以 .md 结尾 */
+export function toFileName(title: string, fallback = '未命名'): string {
   const cleaned = title
     .replace(/[/\\:*?"<>|]/g, ' ')
     .replace(/[\u0000-\u001f]/g, '')

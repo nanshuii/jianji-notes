@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { getStorage, isDesktop } from './storage'
 import {
   type Note,
+  LEDGER_TAG,
+  allTags,
   baseName,
   formatDate,
   listProgress,
@@ -9,10 +11,13 @@ import {
   parseNote,
   serializeNote,
   snippet,
+  splitTags,
   stampTitle,
   toFileName,
   wordCount,
 } from './types'
+import { LedgerView } from './LedgerView'
+import { defaultLedgerTitle, ledgerSummary, parseLedger, serializeLedger } from './ledger'
 import { RichEditor, type RichEditorHandle } from './RichEditor'
 import MANUAL_BODY from './manual.md?raw'
 
@@ -36,6 +41,16 @@ const WELCOME_BODY = `欢迎。这是一个完全本地运行的笔记应用，�
 - [ ] 点一下左边的圆圈试试
 - [ ] 建一个自己的笔记本
 - [ ] 写一篇图文混排的笔记
+
+## 记账
+
+左边有个「记账本」，已经帮你建好并置顶了。点「＋ 新建笔记」右边的小箭头 ▾，
+选「记账笔记」就能开始记账：选支出还是收入、填金额、点分类，一笔就记上了。
+
+## 标记
+
+标题下面可以给笔记加标记，随便起名（比如「重要」「待读」）。左边最下面的
+「标记」分组能按标记筛选。
 
 想了解全部功能，看同一个文件夹里的《简记操作手册》。
 
@@ -81,6 +96,27 @@ function writePinnedNbs(list: string[]) {
   }
 }
 
+/* ---------------- 记账本 ---------------- */
+/** 记账笔记默认落在这个笔记本里 */
+const LEDGER_NB = '记账本'
+const LEDGER_SEEDED_KEY = 'jianji.ledger.v1'
+
+function wasLedgerSeeded(): boolean {
+  try {
+    return localStorage.getItem(LEDGER_SEEDED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function markLedgerSeeded() {
+  try {
+    localStorage.setItem(LEDGER_SEEDED_KEY, '1')
+  } catch {
+    /* 同上 */
+  }
+}
+
 function byUpdated(a: Note, b: Note): number {
   return Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt
 }
@@ -114,8 +150,13 @@ export default function App() {
     | { mode: 'new'; value: string }
     | { mode: 'rename-nb'; value: string; target: string }
     | { mode: 'rename-note'; value: string; target: string }
+    | { mode: 'tag'; value: string; target: string }
     | null
   >(null)
+  /** 左栏按标记筛选；null 表示不筛 */
+  const [tagFilter, setTagFilter] = useState<string | null>(null)
+  /** 「新建笔记」旁边的下拉：选普通笔记还是记账笔记 */
+  const [newMenu, setNewMenu] = useState<{ x: number; y: number } | null>(null)
   /** 右键菜单：笔记或笔记本，坐标是鼠标位置 */
   const [menu, setMenu] = useState<
     | { kind: 'note'; file: string; x: number; y: number }
@@ -163,6 +204,8 @@ export default function App() {
               createdAt: now,
               updatedAt: now,
               pinned: false,
+              tags: [],
+              ledger: false,
             },
             {
               file: toFileName(WELCOME_TITLE),
@@ -172,6 +215,8 @@ export default function App() {
               createdAt: now - 2000,
               updatedAt: now - 2000,
               pinned: false,
+              tags: [],
+              ledger: false,
             },
           ]
           for (const s of seeds) {
@@ -188,8 +233,27 @@ export default function App() {
         loaded.sort(byUpdated)
         if (cancelled) return
         setNotes(loaded)
-        setNotebooks(nbs)
-        setPinnedNbs(readPinnedNbs().filter((n) => nbs.includes(n)))
+
+        // 记账本：第一次运行自动建好并置顶；用户自己删掉后不再反复重建
+        let allNbs = nbs
+        let pins = readPinnedNbs()
+        if (!wasLedgerSeeded()) {
+          if (!allNbs.includes(LEDGER_NB)) {
+            try {
+              await storage.createNotebook(LEDGER_NB)
+            } catch {
+              /* 已经存在就算了 */
+            }
+            allNbs = [...new Set([...allNbs, LEDGER_NB])].sort()
+          }
+          if (!pins.includes(LEDGER_NB)) {
+            pins = [...pins, LEDGER_NB]
+            writePinnedNbs(pins)
+          }
+          markLedgerSeeded()
+        }
+        setNotebooks(allNbs)
+        setPinnedNbs(pins.filter((n) => allNbs.includes(n)))
         setActiveFile(loaded[0]?.file ?? null)
         setDocSeq((v) => v + 1)
         setLocation(dir)
@@ -334,12 +398,28 @@ export default function App() {
     [activeFile],
   )
 
+  /**
+   * 新建笔记。
+   * kind='ledger' 时建的是记账笔记：自动进「记账本」、带记账标记、正文是一张空的流水表。
+   */
   const createNote = useCallback(
-    async () => {
-      const nb = scope ?? ''
+    async (kind: 'note' | 'ledger' = 'note') => {
       const now = Date.now()
-      // 默认标题就是当前时间（年月日时分秒），撞名了加序号
-      const base = stampTitle(now)
+      const isLedger = kind === 'ledger'
+      let nb = isLedger ? LEDGER_NB : (scope ?? '')
+
+      // 记账本被删掉了就顺手补回来
+      if (isLedger && !notebooks.includes(LEDGER_NB)) {
+        try {
+          await storage.createNotebook(LEDGER_NB)
+        } catch {
+          /* 已经有同名目录就不再建 */
+        }
+        setNotebooks((prev) => [...new Set([...prev, LEDGER_NB])].sort())
+      }
+
+      // 默认标题：普通笔记用当前时间，记账笔记用「记账 2026-10」
+      const base = isLedger ? defaultLedgerTitle(now) : stampTitle(now)
       const taken = new Set(notesRef.current.map((n) => n.file))
       let name = toFileName(base)
       let i = 2
@@ -352,10 +432,12 @@ export default function App() {
         file,
         notebook: nb,
         title: base,
-        body: '',
+        body: isLedger ? serializeLedger({ entries: [], extra: '' }) : '',
         createdAt: now,
         updatedAt: now,
         pinned: false,
+        tags: [],
+        ledger: isLedger,
       }
       try {
         await storage.save(file, serializeNote(note))
@@ -364,13 +446,15 @@ export default function App() {
         setError(String(e))
       }
       setNotes((prev) => [note, ...prev])
+      setTagFilter(null)
       openNote(file)
       // 在「全部」里新建会落到未分类，把视图跟过去，免得找不到
-      if (scope === null) setScope('')
+      if (isLedger) setScope(LEDGER_NB)
+      else if (scope === null) setScope('')
       setQuery('')
-      window.setTimeout(() => richRef.current?.focus(), 60)
+      if (!isLedger) window.setTimeout(() => richRef.current?.focus(), 60)
     },
-    [storage, scope, openNote],
+    [storage, scope, openNote, notebooks],
   )
 
   const removeNote = useCallback(
@@ -433,6 +517,41 @@ export default function App() {
     })
   }, [])
 
+  /** 给某篇笔记加标记（可以一次加好几个，用逗号分隔） */
+  const addTags = useCallback(
+    (file: string, raw: string) => {
+      const wanted = splitTags(raw).filter((t) => t !== LEDGER_TAG)
+      if (wanted.length === 0) return
+      const note = notesRef.current.find((n) => n.file === file)
+      if (!note) return
+      const next = [...new Set([...note.tags, ...wanted])]
+      if (file === activeFileRef.current) {
+        patch({ tags: next })
+      } else {
+        const updated = { ...note, tags: next, updatedAt: Date.now() }
+        setNotes((prev) => prev.map((n) => (n.file === file ? updated : n)))
+        void persist(updated)
+      }
+    },
+    [patch, persist],
+  )
+
+  const removeTag = useCallback(
+    (file: string, tag: string) => {
+      const note = notesRef.current.find((n) => n.file === file)
+      if (!note) return
+      const next = note.tags.filter((t) => t !== tag)
+      if (file === activeFileRef.current) {
+        patch({ tags: next })
+      } else {
+        const updated = { ...note, tags: next, updatedAt: Date.now() }
+        setNotes((prev) => prev.map((n) => (n.file === file ? updated : n)))
+        void persist(updated)
+      }
+    },
+    [patch, persist],
+  )
+
   /* ---------------- 笔记本操作 ---------------- */
   const applyNotebookRename = useCallback(
     (from: string, to: string) => {
@@ -483,6 +602,8 @@ export default function App() {
           applyNotebookRename(from, name)
         } else if (prompt.mode === 'rename-note') {
           renameNoteTo(prompt.target, name)
+        } else if (prompt.mode === 'tag') {
+          addTags(prompt.target, value)
         }
         setPrompt(null)
       } catch (e) {
@@ -490,7 +611,7 @@ export default function App() {
         setPrompt(null)
       }
     },
-    [prompt, storage, applyNotebookRename, renameNoteTo],
+    [prompt, storage, applyNotebookRename, renameNoteTo, addTags],
   )
 
   /**
@@ -570,7 +691,7 @@ export default function App() {
       const key = e.key.toLowerCase()
       if (key === 'n') {
         e.preventDefault()
-        void createNote()
+        void createNote(e.shiftKey ? 'ledger' : 'note')
       } else if (key === 'f') {
         e.preventDefault()
         searchRef.current?.focus()
@@ -598,6 +719,19 @@ export default function App() {
     return { map, uncategorized }
   }, [notes])
 
+  /** 所有标记及使用次数（含内置的「记账」） */
+  const tagCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const n of notes) {
+      for (const t of allTags(n)) m.set(t, (m.get(t) ?? 0) + 1)
+    }
+    return [...m.entries()].sort(
+      (a, b) => Number(b[0] === LEDGER_TAG) - Number(a[0] === LEDGER_TAG) ||
+        b[1] - a[1] ||
+        a[0].localeCompare(b[0], 'zh-Hans-CN'),
+    )
+  }, [notes])
+
   /** 置顶的笔记本排前面，其余按名称 */
   const orderedNotebooks = useMemo(() => {
     const pin = new Set(pinnedNbs)
@@ -606,13 +740,16 @@ export default function App() {
     )
   }, [notebooks, pinnedNbs])
 
-  // 搜索时跨全部笔记本，否则只看当前范围
-  const filtered = useMemo(() => {    const q = query.trim().toLowerCase()
+  // 搜索时跨全部笔记本，否则只看当前范围；标记筛选是叠加条件
+  const filtered = useMemo(() => {
+    const byTag = (list: Note[]) =>
+      tagFilter ? list.filter((n) => allTags(n).includes(tagFilter)) : list
+    const q = query.trim().toLowerCase()
     if (q) {
       const hits = notes.filter(
         (n) => n.title.toLowerCase().includes(q) || n.body.toLowerCase().includes(q),
       )
-      return [...hits].sort(byUpdated)
+      return [...byTag(hits)].sort(byUpdated)
     }
     const base =
       scope === null
@@ -620,15 +757,22 @@ export default function App() {
         : scope === ''
           ? notes.filter((n) => !n.notebook)
           : notes.filter((n) => n.notebook === scope)
-    return [...base].sort(byUpdated)
-  }, [notes, query, scope])
+    return [...byTag(base)].sort(byUpdated)
+  }, [notes, query, scope, tagFilter])
 
   const active = notes.find((n) => n.file === activeFile) ?? null
   // 任何一篇正文里有 `- [ ]` 就算有待办，不再是「清单」这种类型专属
   const activeStat = active ? statsOf(active.body) : null
 
-  const scopeLabel =
-    query.trim() ? '搜索结果' : scope === null ? '全部笔记' : scope === '' ? '未分类' : scope
+  const scopeLabel = tagFilter
+    ? `标记：${tagFilter}`
+    : query.trim()
+      ? '搜索结果'
+      : scope === null
+        ? '全部笔记'
+        : scope === ''
+          ? '未分类'
+          : scope
 
   const canDeleteNotebook = scope !== null && scope !== ''
 
@@ -651,10 +795,11 @@ export default function App() {
 
         <div className="rail-group">
           <button
-            className={`rail-item${scope === null && !query ? ' active' : ''}`}
+            className={`rail-item${scope === null && !query && !tagFilter ? ' active' : ''}`}
             onClick={() => {
               setScope(null)
               setQuery('')
+              setTagFilter(null)
             }}
             title="全部笔记"
           >
@@ -668,10 +813,11 @@ export default function App() {
           </button>
 
           <button
-            className={`rail-item${scope === '' && !query ? ' active' : ''}`}
+            className={`rail-item${scope === '' && !query && !tagFilter ? ' active' : ''}`}
             onClick={() => {
               setScope('')
               setQuery('')
+              setTagFilter(null)
             }}
             title="未分类"
           >
@@ -744,6 +890,30 @@ export default function App() {
           })}
         </div>
 
+        {railOpen && tagCounts.length > 0 && <div className="rail-label">标记</div>}
+
+        {railOpen && tagCounts.length > 0 && (
+          <div className="rail-group rail-tags">
+            {tagCounts.map(([t, c]) => (
+              <button
+                key={t}
+                className={`rail-item tag${tagFilter === t ? ' active' : ''}`}
+                onClick={() => {
+                  setTagFilter((cur) => (cur === t ? null : t))
+                  setQuery('')
+                }}
+                title={`只看带「${t}」标记的笔记`}
+              >
+                <span className={`rail-ico${t === LEDGER_TAG ? ' pinned' : ''}`}>
+                  {t === LEDGER_TAG ? '¥' : '#'}
+                </span>
+                <span className="rail-name">{t}</span>
+                <b className="rail-count">{c}</b>
+              </button>
+            ))}
+          </div>
+        )}
+
         <button
           className="rail-add"
           onClick={() => setPrompt({ mode: 'new', value: '' })}
@@ -766,6 +936,11 @@ export default function App() {
           <span className="list-scope" title={scopeLabel}>
             {scopeLabel}
           </span>
+          {tagFilter && (
+            <button className="scope-clear" onClick={() => setTagFilter(null)} title="取消标记筛选">
+              清除
+            </button>
+          )}
           {canDeleteNotebook && (
             <button
               className="scope-del"
@@ -793,8 +968,18 @@ export default function App() {
         </div>
 
         <div className="new-buttons">
-          <button onClick={() => void createNote()} title="⌘N">
+          <button className="new-main" onClick={() => void createNote('note')} title="⌘N">
             <span className="plus">＋</span> 新建笔记
+          </button>
+          <button
+            className="new-more"
+            title="新建记账笔记（⌘⇧N）"
+            onClick={(e) => {
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+              setNewMenu({ x: r.right - 168, y: r.bottom + 6 })
+            }}
+          >
+            ▾
           </button>
         </div>
 
@@ -807,6 +992,9 @@ export default function App() {
           {filtered.map((n) => {
             // 有待办的笔记显示完成数，剩下的照常显示摘要（都走缓存，不每次重算）
             const st = statsOf(n.body)
+            const tags = allTags(n)
+            // 记账笔记的正文是一张表，摘要改成「本月支出/收入」
+            const sub = n.ledger ? ledgerSummary(n.body) : st.sub
             return (
               <button
                 key={n.file}
@@ -819,20 +1007,34 @@ export default function App() {
                 }}
               >
                 <div className="note-item-top">
-                  <span className={`dot${st.total > 0 && st.done < st.total ? ' open' : ''}`} />
+                  <span
+                    className={`dot${st.total > 0 && st.done < st.total ? ' open' : ''}${
+                      n.ledger ? ' is-ledger' : ''
+                    }`}
+                  />
                   <span className="note-title">{n.title || '未命名'}</span>
                   {n.pinned && <span className="pin">·</span>}
                   <span className="note-time">{formatDate(n.updatedAt)}</span>
                 </div>
                 <div className="note-sub">
-                  {st.total > 0 && (
+                  {!n.ledger && st.total > 0 && (
                     <span className="note-prog">
                       {st.done}/{st.total}
                     </span>
                   )}
-                  {st.total > 0 && st.sub ? ' · ' : ''}
-                  {st.sub || (st.total > 0 ? '' : '空白')}
+                  {!n.ledger && st.total > 0 && st.sub ? ' · ' : ''}
+                  {sub || (st.total > 0 ? '' : '空白')}
                 </div>
+                {tags.length > 0 && (
+                  <div className="note-tags">
+                    {tags.slice(0, 3).map((t) => (
+                      <span key={t} className={`tag-mini${t === LEDGER_TAG ? ' is-ledger' : ''}`}>
+                        {t}
+                      </span>
+                    ))}
+                    {tags.length > 3 && <span className="tag-mini">+{tags.length - 3}</span>}
+                  </div>
+                )}
                 {query.trim() && (
                   <div className="note-nb">{n.notebook || '未分类'}</div>
                 )}
@@ -869,6 +1071,29 @@ export default function App() {
                   }
                 }}
               />
+              <div className="tag-row">
+                {allTags(active).map((t) => (
+                  <span key={t} className={`tag${t === LEDGER_TAG ? ' is-ledger' : ''}`}>
+                    {t}
+                    {t !== LEDGER_TAG && (
+                      <button
+                        className="tag-x"
+                        title="去掉这个标记"
+                        onClick={() => removeTag(active.file, t)}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </span>
+                ))}
+                <button
+                  className="tag-add"
+                  onClick={() => setPrompt({ mode: 'tag', value: '', target: active.file })}
+                  title="给这篇笔记加标记"
+                >
+                  ＋ 标记
+                </button>
+              </div>
               <div className="head-row">
                 <div className="meta">
                   <select
@@ -885,8 +1110,12 @@ export default function App() {
                     ))}
                   </select>
                   <span>{formatDate(active.updatedAt)}</span>
-                  <span>{activeStat?.words ?? 0} 字</span>
-                  {activeStat && activeStat.total > 0 && (
+                  {active.ledger ? (
+                    <span>{parseLedger(active.body).entries.length} 笔</span>
+                  ) : (
+                    <span>{activeStat?.words ?? 0} 字</span>
+                  )}
+                  {!active.ledger && activeStat && activeStat.total > 0 && (
                     <span>
                       待办 {activeStat.done}/{activeStat.total}
                     </span>
@@ -912,13 +1141,21 @@ export default function App() {
               </div>
             </header>
 
-            <section className="editor-body">
-              <RichEditor
-                key={docSeq}
-                ref={richRef}
-                initial={active.body}
-                onChange={(body) => patch({ body })}
-              />
+            <section className={`editor-body${active.ledger ? ' ledger-body' : ''}`}>
+              {active.ledger ? (
+                <LedgerView
+                  key={active.file}
+                  note={active}
+                  onChange={(body) => patch({ body })}
+                />
+              ) : (
+                <RichEditor
+                  key={docSeq}
+                  ref={richRef}
+                  initial={active.body}
+                  onChange={(body) => patch({ body })}
+                />
+              )}
             </section>
           </>
         )}
@@ -929,6 +1166,22 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* ---------- 「新建」下拉 ---------- */}
+      {newMenu && (
+        <ContextMenu
+          x={newMenu.x}
+          y={newMenu.y}
+          onClose={() => setNewMenu(null)}
+          items={[
+            { label: '普通笔记', onClick: () => void createNote('note') },
+            {
+              label: '记账笔记（存到「记账本」）',
+              onClick: () => void createNote('ledger'),
+            },
+          ]}
+        />
+      )}
 
       {/* ---------- 右键菜单 ---------- */}
       {menu && (
@@ -1030,17 +1283,26 @@ export default function App() {
               ? '新建笔记本'
               : prompt.mode === 'rename-nb'
                 ? '重命名笔记本'
-                : '重命名笔记'
+                : prompt.mode === 'rename-note'
+                  ? '重命名笔记'
+                  : '加个标记'
           }
           hint={
             prompt.mode === 'new'
               ? '会在笔记文件夹里建一个同名子目录'
               : prompt.mode === 'rename-nb'
                 ? '文件夹会一起改名，里面的笔记跟着走'
-                : '文件名会一起改成这个标题'
+                : prompt.mode === 'rename-note'
+                  ? '文件名会一起改成这个标题'
+                  : '随便起名，多个用逗号分隔。已有的标记可以直接选'
           }
-          placeholder={prompt.mode === 'rename-note' ? '笔记标题' : '笔记本名称'}
+          placeholder={prompt.mode === 'tag' ? '比如：重要, 待读' : prompt.mode === 'rename-note' ? '笔记标题' : '笔记本名称'}
           defaultValue={prompt.value}
+          suggestions={
+            prompt.mode === 'tag'
+              ? tagCounts.map(([t]) => t).filter((t) => t !== LEDGER_TAG)
+              : undefined
+          }
           onCancel={() => setPrompt(null)}
           onConfirm={(v) => void submitPrompt(v)}
         />
@@ -1095,6 +1357,7 @@ function PromptModal({
   hint,
   placeholder,
   defaultValue,
+  suggestions,
   onCancel,
   onConfirm,
 }: {
@@ -1102,6 +1365,8 @@ function PromptModal({
   hint: string
   placeholder: string
   defaultValue: string
+  /** 已有的选项，点一下填进输入框（按标记时用） */
+  suggestions?: string[]
   onCancel: () => void
   onConfirm: (value: string) => void
 }) {
@@ -1137,6 +1402,25 @@ function PromptModal({
             }
           }}
         />
+        {suggestions && suggestions.length > 0 && (
+          <div className="prompt-sugs">
+            {suggestions.map((s) => (
+              <button
+                key={s}
+                className="prompt-sug"
+                onClick={() =>
+                  setValue((prev) => {
+                    const cur = prev.replace(/[,，]\s*$/, '').trim()
+                    if (cur.split(/[,，]/).map((x) => x.trim()).includes(s)) return prev
+                    return cur ? `${cur}, ${s}` : s
+                  })
+                }
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="modal-actions">
           <button onClick={onCancel}>取消</button>
           <button className="primary" onClick={submit}>
