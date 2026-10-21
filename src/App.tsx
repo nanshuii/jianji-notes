@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { getStorage, isDesktop } from './storage'
 import {
   type Note,
@@ -61,6 +61,26 @@ function wasInited(): boolean {
   }
 }
 
+/* ---------------- 笔记本置顶（笔记的置顶存在文件 frontmatter，笔记本没有文件可存） ---------------- */
+const NB_PIN_KEY = 'jianji.nb.pinned.v1'
+
+function readPinnedNbs(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(NB_PIN_KEY) || '[]')
+    return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function writePinnedNbs(list: string[]) {
+  try {
+    localStorage.setItem(NB_PIN_KEY, JSON.stringify([...new Set(list)]))
+  } catch {
+    /* 存不进去也不影响本次会话 */
+  }
+}
+
 function byUpdated(a: Note, b: Note): number {
   return Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt
 }
@@ -87,12 +107,22 @@ export default function App() {
   const [railOpen, setRailOpen] = useState(true)
 
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
-  const [pendingNbDelete, setPendingNbDelete] = useState<string | null>(null)
-  const [prompt, setPrompt] = useState<{
-    mode: 'new' | 'rename'
-    value: string
-    target?: string
-  } | null>(null)
+  const [pendingNbDelete, setPendingNbDelete] = useState<{ name: string; count: number } | null>(
+    null,
+  )
+  const [prompt, setPrompt] = useState<
+    | { mode: 'new'; value: string }
+    | { mode: 'rename-nb'; value: string; target: string }
+    | { mode: 'rename-note'; value: string; target: string }
+    | null
+  >(null)
+  /** 右键菜单：笔记或笔记本，坐标是鼠标位置 */
+  const [menu, setMenu] = useState<
+    | { kind: 'note'; file: string; x: number; y: number }
+    | { kind: 'notebook'; name: string; x: number; y: number }
+    | null
+  >(null)
+  const [pinnedNbs, setPinnedNbs] = useState<string[]>([])
 
   const notesRef = useRef<Note[]>([])
   const lastSaved = useRef<Map<string, string>>(new Map())
@@ -159,6 +189,7 @@ export default function App() {
         if (cancelled) return
         setNotes(loaded)
         setNotebooks(nbs)
+        setPinnedNbs(readPinnedNbs().filter((n) => nbs.includes(n)))
         setActiveFile(loaded[0]?.file ?? null)
         setDocSeq((v) => v + 1)
         setLocation(dir)
@@ -344,6 +375,7 @@ export default function App() {
 
   const removeNote = useCallback(
     async (file: string) => {
+      const wasActive = activeFileRef.current === file
       try {
         await storage.remove(file)
       } catch (e) {
@@ -352,9 +384,13 @@ export default function App() {
       lastSaved.current.delete(file)
       const rest = notesRef.current.filter((n) => n.file !== file)
       setNotes(rest)
-      setActiveFile(rest[0]?.file ?? null)
-      setDocSeq((v) => v + 1)
+      // 删的是别的笔记时，当前打开的笔记保持不动
+      if (wasActive) {
+        setActiveFile(rest[0]?.file ?? null)
+        setDocSeq((v) => v + 1)
+      }
       setPendingDelete(null)
+      setMenu(null)
     },
     [storage],
   )
@@ -363,6 +399,39 @@ export default function App() {
     const note = notesRef.current.find((n) => n.file === activeFile)
     if (note) patch({ pinned: !note.pinned })
   }, [activeFile, patch])
+
+  /** 列表 / 右键菜单里的置顶：不用先打开这篇笔记 */
+  const toggleNotePin = useCallback(
+    (file: string) => {
+      const note = notesRef.current.find((n) => n.file === file)
+      if (!note) return
+      const next = { ...note, pinned: !note.pinned }
+      setNotes((prev) => prev.map((n) => (n.file === file ? next : n)))
+      void persist(next)
+    },
+    [persist],
+  )
+
+  /** 右键「重命名」：改标题，并把文件改成同名 */
+  const renameNoteTo = useCallback(
+    (file: string, title: string) => {
+      const note = notesRef.current.find((n) => n.file === file)
+      const clean = title.trim()
+      if (!note || !clean) return
+      const next = { ...note, title: clean, updatedAt: Date.now() }
+      setNotes((prev) => prev.map((n) => (n.file === file ? next : n)))
+      void persist(next, true)
+    },
+    [persist],
+  )
+
+  const toggleNbPin = useCallback((name: string) => {
+    setPinnedNbs((prev) => {
+      const next = prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]
+      writePinnedNbs(next)
+      return next
+    })
+  }, [])
 
   /* ---------------- 笔记本操作 ---------------- */
   const applyNotebookRename = useCallback(
@@ -386,6 +455,11 @@ export default function App() {
       })
       setNotebooks((prev) => prev.map((n) => (n === from ? to : n)).sort())
       setScope((s) => (s === from ? to : s))
+      setPinnedNbs((prev) => {
+        const next = prev.map((n) => (n === from ? to : n))
+        writePinnedNbs(next)
+        return next
+      })
     },
     [],
   )
@@ -399,7 +473,7 @@ export default function App() {
           await storage.createNotebook(name)
           setNotebooks((prev) => [...new Set([...prev, name])].sort())
           setScope(name)
-        } else if (prompt.mode === 'rename' && prompt.target) {
+        } else if (prompt.mode === 'rename-nb') {
           const from = prompt.target
           if (from === name) {
             setPrompt(null)
@@ -407,6 +481,8 @@ export default function App() {
           }
           await storage.renameNotebook(from, name)
           applyNotebookRename(from, name)
+        } else if (prompt.mode === 'rename-note') {
+          renameNoteTo(prompt.target, name)
         }
         setPrompt(null)
       } catch (e) {
@@ -414,21 +490,76 @@ export default function App() {
         setPrompt(null)
       }
     },
-    [prompt, storage, applyNotebookRename],
+    [prompt, storage, applyNotebookRename, renameNoteTo],
   )
 
+  /**
+   * 删除笔记本。
+   * 以前只允许删空目录，笔记本里一有笔记就删不掉（点了没反应）。
+   * 现在两种处理方式：purge=false 把笔记挪到「未分类」，purge=true 连笔记一起删。
+   */
   const deleteNotebook = useCallback(
-    async (name: string) => {
+    async (name: string, purge: boolean) => {
+      const inside = notesRef.current.filter((n) => n.notebook === name)
+      const taken = new Set(
+        notesRef.current.filter((n) => n.notebook === '').map((n) => baseName(n.file)),
+      )
+      const moved = new Map<string, string>() // 旧路径 → 新路径
+      const kept: Note[] = []
       try {
-        await storage.removeNotebook(name)
+        for (const n of inside) {
+          if (purge) {
+            await storage.remove(n.file)
+          } else {
+            const base = baseName(n.file)
+            let target = base
+            let i = 2
+            while (taken.has(target)) {
+              target = `${base.replace(/\.md$/i, '')} ${i}.md`
+              i += 1
+            }
+            taken.add(target)
+            const next = { ...n, notebook: '', file: target }
+            const content = serializeNote(next)
+            await storage.save(target, content)
+            await storage.remove(n.file)
+            lastSaved.current.set(target, content)
+            moved.set(n.file, target)
+            kept.push(next)
+          }
+          lastSaved.current.delete(n.file)
+        }
+
+        await storage.removeNotebook(name, purge)
+
+        const rest = notesRef.current.filter((n) => n.notebook !== name)
+        const all = [...rest, ...kept]
+        setNotes(all)
         setNotebooks((prev) => prev.filter((n) => n !== name))
+        setPinnedNbs((prev) => {
+          const next = prev.filter((n) => n !== name)
+          writePinnedNbs(next)
+          return next
+        })
         setScope((s) => (s === name ? null : s))
+        if (scope === name) setQuery('')
+
+        const cur = activeFileRef.current
+        if (cur && inside.some((n) => n.file === cur)) {
+          if (moved.has(cur)) {
+            setActiveFile(moved.get(cur) as string) // 跟着挪到未分类，正文继续看
+          } else {
+            setActiveFile(all[0]?.file ?? null)
+            setDocSeq((v) => v + 1)
+          }
+        }
       } catch (e) {
         setError(String(e))
       }
       setPendingNbDelete(null)
+      setMenu(null)
     },
-    [storage],
+    [storage, scope],
   )
 
   /* ---------------- 快捷键 ---------------- */
@@ -467,9 +598,16 @@ export default function App() {
     return { map, uncategorized }
   }, [notes])
 
+  /** 置顶的笔记本排前面，其余按名称 */
+  const orderedNotebooks = useMemo(() => {
+    const pin = new Set(pinnedNbs)
+    return [...notebooks].sort(
+      (a, b) => Number(pin.has(b)) - Number(pin.has(a)) || a.localeCompare(b, 'zh-Hans-CN'),
+    )
+  }, [notebooks, pinnedNbs])
+
   // 搜索时跨全部笔记本，否则只看当前范围
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
+  const filtered = useMemo(() => {    const q = query.trim().toLowerCase()
     if (q) {
       const hits = notes.filter(
         (n) => n.title.toLowerCase().includes(q) || n.body.toLowerCase().includes(q),
@@ -550,45 +688,60 @@ export default function App() {
         {railOpen && <div className="rail-label">笔记本</div>}
 
         <div className="rail-group rail-scroll">
-          {notebooks.length === 0 && railOpen && (
+          {orderedNotebooks.length === 0 && railOpen && (
             <div className="rail-empty">还没有笔记本</div>
           )}
-          {notebooks.map((nb) => (
-            <div
-              key={nb}
-              className={`rail-item nb${scope === nb && !query ? ' active' : ''}`}
-            >
-              <button
-                className="rail-main"
-                onClick={() => {
-                  setScope(nb)
-                  setQuery('')
+          {orderedNotebooks.map((nb) => {
+            const nbPinned = pinnedNbs.includes(nb)
+            return (
+              <div
+                key={nb}
+                className={`rail-item nb${scope === nb && !query ? ' active' : ''}`}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setMenu({ kind: 'notebook', name: nb, x: e.clientX, y: e.clientY })
                 }}
-                title={nb}
               >
-                <span className="rail-ico">▸</span>
+                <button
+                  className="rail-main"
+                  onClick={() => {
+                    setScope(nb)
+                    setQuery('')
+                  }}
+                  title={nb}
+                >
+                  <span className={`rail-ico${nbPinned ? ' pinned' : ''}`}>
+                    {nbPinned ? '★' : '▸'}
+                  </span>
+                  {railOpen && (
+                    <>
+                      <span className="rail-name">{nb}</span>
+                      <b className="rail-count">{counts.map.get(nb) ?? 0}</b>
+                    </>
+                  )}
+                </button>
                 {railOpen && (
-                  <>
-                    <span className="rail-name">{nb}</span>
-                    <b className="rail-count">{counts.map.get(nb) ?? 0}</b>
-                  </>
+                  <span className="rail-acts">
+                    <button
+                      onClick={() => setPrompt({ mode: 'rename-nb', value: nb, target: nb })}
+                      title="重命名"
+                    >
+                      ✎
+                    </button>
+                    <button
+                      onClick={() =>
+                        setPendingNbDelete({ name: nb, count: counts.map.get(nb) ?? 0 })
+                      }
+                      title="删除"
+                    >
+                      ×
+                    </button>
+                  </span>
                 )}
-              </button>
-              {railOpen && (
-                <span className="rail-acts">
-                  <button
-                    onClick={() => setPrompt({ mode: 'rename', value: nb, target: nb })}
-                    title="重命名"
-                  >
-                    ✎
-                  </button>
-                  <button onClick={() => setPendingNbDelete(nb)} title="删除">
-                    ×
-                  </button>
-                </span>
-              )}
-            </div>
-          ))}
+              </div>
+            )
+          })}
         </div>
 
         <button
@@ -616,7 +769,9 @@ export default function App() {
           {canDeleteNotebook && (
             <button
               className="scope-del"
-              onClick={() => setPendingNbDelete(scope)}
+              onClick={() =>
+                setPendingNbDelete({ name: scope, count: counts.map.get(scope) ?? 0 })
+              }
               title="删除当前笔记本"
             >
               删除
@@ -657,6 +812,11 @@ export default function App() {
                 key={n.file}
                 className={`note-item${n.file === activeFile ? ' active' : ''}`}
                 onClick={() => openNote(n.file)}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setMenu({ kind: 'note', file: n.file, x: e.clientX, y: e.clientY })
+                }}
               >
                 <div className="note-item-top">
                   <span className={`dot${st.total > 0 && st.done < st.total ? ' open' : ''}`} />
@@ -770,6 +930,63 @@ export default function App() {
         )}
       </main>
 
+      {/* ---------- 右键菜单 ---------- */}
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          onClose={() => setMenu(null)}
+          items={
+            menu.kind === 'note'
+              ? (() => {
+                  const note = notes.find((n) => n.file === menu.file)
+                  return [
+                    {
+                      label: note?.pinned ? '取消置顶' : '置顶',
+                      onClick: () => toggleNotePin(menu.file),
+                    },
+                    {
+                      label: '重命名',
+                      onClick: () =>
+                        setPrompt({
+                          mode: 'rename-note',
+                          value: note?.title ?? '',
+                          target: menu.file,
+                        }),
+                    },
+                    { sep: true },
+                    {
+                      label: '删除',
+                      danger: true,
+                      onClick: () => setPendingDelete(menu.file),
+                    },
+                  ]
+                })()
+              : [
+                  {
+                    label: pinnedNbs.includes(menu.name) ? '取消置顶' : '置顶',
+                    onClick: () => toggleNbPin(menu.name),
+                  },
+                  {
+                    label: '重命名',
+                    onClick: () =>
+                      setPrompt({ mode: 'rename-nb', value: menu.name, target: menu.name }),
+                  },
+                  { sep: true },
+                  {
+                    label: '删除',
+                    danger: true,
+                    onClick: () =>
+                      setPendingNbDelete({
+                        name: menu.name,
+                        count: counts.map.get(menu.name) ?? 0,
+                      }),
+                  },
+                ]
+          }
+        />
+      )}
+
       {/* ---------- 弹窗 ---------- */}
       {pendingDelete && (
         <Modal
@@ -784,23 +1001,45 @@ export default function App() {
 
       {pendingNbDelete && (
         <Modal
-          title={`删除笔记本「${pendingNbDelete}」？`}
-          desc="只能删除空的笔记本。里面还有笔记的话，请先把笔记移到别的笔记本或删掉。"
-          confirmText="删除"
+          title={`删除笔记本「${pendingNbDelete.name}」？`}
+          desc={
+            pendingNbDelete.count > 0
+              ? `里面有 ${pendingNbDelete.count} 篇笔记。确认后这些笔记会先移到「未分类」，一篇都不会丢。`
+              : '这个笔记本是空的，删除不会影响任何笔记。'
+          }
+          confirmText={pendingNbDelete.count > 0 ? '移到未分类并删除' : '删除'}
           danger
+          extra={
+            pendingNbDelete.count > 0
+              ? {
+                  text: `连 ${pendingNbDelete.count} 篇笔记一起删掉`,
+                  danger: true,
+                  onClick: () => void deleteNotebook(pendingNbDelete.name, true),
+                }
+              : undefined
+          }
           onCancel={() => setPendingNbDelete(null)}
-          onConfirm={() => void deleteNotebook(pendingNbDelete)}
+          onConfirm={() => void deleteNotebook(pendingNbDelete.name, false)}
         />
       )}
 
       {prompt && (
         <PromptModal
-          title={prompt.mode === 'new' ? '新建笔记本' : '重命名笔记本'}
+          title={
+            prompt.mode === 'new'
+              ? '新建笔记本'
+              : prompt.mode === 'rename-nb'
+                ? '重命名笔记本'
+                : '重命名笔记'
+          }
           hint={
             prompt.mode === 'new'
               ? '会在笔记文件夹里建一个同名子目录'
-              : '文件夹会一起改名，里面的笔记跟着走'
+              : prompt.mode === 'rename-nb'
+                ? '文件夹会一起改名，里面的笔记跟着走'
+                : '文件名会一起改成这个标题'
           }
+          placeholder={prompt.mode === 'rename-note' ? '笔记标题' : '笔记本名称'}
           defaultValue={prompt.value}
           onCancel={() => setPrompt(null)}
           onConfirm={(v) => void submitPrompt(v)}
@@ -817,6 +1056,7 @@ function Modal({
   desc,
   confirmText,
   danger,
+  extra,
   onCancel,
   onConfirm,
 }: {
@@ -824,6 +1064,8 @@ function Modal({
   desc: string
   confirmText: string
   danger?: boolean
+  /** 次要的破坏性操作，比如「连笔记一起删」 */
+  extra?: { text: string; danger?: boolean; onClick: () => void }
   onCancel: () => void
   onConfirm: () => void
 }) {
@@ -833,6 +1075,11 @@ function Modal({
         <h3>{title}</h3>
         <p>{desc}</p>
         <div className="modal-actions">
+          {extra && (
+            <button className={`ghost${extra.danger ? ' ghost-danger' : ''}`} onClick={extra.onClick}>
+              {extra.text}
+            </button>
+          )}
           <button onClick={onCancel}>取消</button>
           <button className={danger ? 'danger' : ''} onClick={onConfirm}>
             {confirmText}
@@ -846,12 +1093,14 @@ function Modal({
 function PromptModal({
   title,
   hint,
+  placeholder,
   defaultValue,
   onCancel,
   onConfirm,
 }: {
   title: string
   hint: string
+  placeholder: string
   defaultValue: string
   onCancel: () => void
   onConfirm: (value: string) => void
@@ -877,7 +1126,7 @@ function PromptModal({
           ref={ref}
           className="modal-input"
           value={value}
-          placeholder="笔记本名称"
+          placeholder={placeholder}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
@@ -895,6 +1144,83 @@ function PromptModal({
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+/* ---------------- 右键菜单 ---------------- */
+
+type MenuEntry = { label: string; onClick: () => void; danger?: boolean } | { sep: true }
+
+function ContextMenu({
+  x,
+  y,
+  items,
+  onClose,
+}: {
+  x: number
+  y: number
+  items: MenuEntry[]
+  onClose: () => void
+}) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const [pos, setPos] = useState({ x, y })
+
+  // 贴着窗口边缘右键时，把菜单收回可视区域
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    setPos({
+      x: Math.max(6, Math.min(x, window.innerWidth - r.width - 6)),
+      y: Math.max(6, Math.min(y, window.innerHeight - r.height - 6)),
+    })
+  }, [x, y])
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) onClose()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('mousedown', onDown, true)
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('resize', onClose)
+    window.addEventListener('blur', onClose)
+    window.addEventListener('scroll', onClose, true)
+    return () => {
+      window.removeEventListener('mousedown', onDown, true)
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', onClose)
+      window.removeEventListener('blur', onClose)
+      window.removeEventListener('scroll', onClose, true)
+    }
+  }, [onClose])
+
+  return (
+    <div
+      ref={ref}
+      className="ctx"
+      style={{ left: pos.x, top: pos.y }}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      {items.map((it, i) =>
+        'sep' in it ? (
+          <div key={`s${i}`} className="ctx-sep" />
+        ) : (
+          <button
+            key={it.label}
+            className={`ctx-item${it.danger ? ' danger' : ''}`}
+            onClick={() => {
+              onClose()
+              it.onClick()
+            }}
+          >
+            {it.label}
+          </button>
+        ),
+      )}
     </div>
   )
 }

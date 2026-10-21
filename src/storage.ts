@@ -10,7 +10,8 @@ export interface Storage {
   listNotebooks(): Promise<string[]>
   createNotebook(name: string): Promise<void>
   renameNotebook(from: string, to: string): Promise<void>
-  removeNotebook(name: string): Promise<void>
+  /** force=true 时连同目录里剩下的文件一起删掉（笔记已由调用方处理） */
+  removeNotebook(name: string, force?: boolean): Promise<void>
 }
 
 function inTauri(): boolean {
@@ -52,8 +53,8 @@ const tauriStorage: Storage = {
   async renameNotebook(from, to) {
     await tauriInvoke('rename_notebook', { from, to })
   },
-  async removeNotebook(name) {
-    await tauriInvoke('delete_notebook', { name })
+  async removeNotebook(name, force = false) {
+    await tauriInvoke('delete_notebook', { name, force })
   },
 }
 
@@ -129,10 +130,13 @@ const webStorage: Storage = {
     writeStore(next)
     writeNotebooks(list.map((n) => (n === from ? to : n)))
   },
-  async removeNotebook(name) {
+  async removeNotebook(name, force = false) {
     const data = readStore()
-    if (Object.keys(data).some((f) => f.startsWith(`${name}/`))) {
-      throw new Error('这个笔记本里还有笔记，先把笔记移走或删除')
+    const inside = Object.keys(data).filter((f) => f.startsWith(`${name}/`))
+    if (inside.length > 0) {
+      if (!force) throw new Error('这个笔记本里还有笔记，先把笔记移走或删除')
+      for (const f of inside) delete data[f]
+      writeStore(data)
     }
     writeNotebooks(readNotebooks().filter((n) => n !== name))
   },

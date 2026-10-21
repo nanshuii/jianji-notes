@@ -252,22 +252,95 @@ fn rename_notebook(app: tauri::AppHandle, from: String, to: String) -> Result<()
     fs::rename(&src, &dst).map_err(|e| format!("重命名失败: {e}"))
 }
 
-#[tauri::command]
-fn delete_notebook(app: tauri::AppHandle, name: String) -> Result<(), String> {
-    check_notebook_name(&name)?;
-    let dir = dir_of(&app)?.join(&name);
+/// 删除笔记本目录。
+/// 非 force 时只允许删「没有 .md 的」目录；force 时连目录里的东西一起删。
+/// 抽出来是为了能单测：删不掉笔记本这个 bug 就出在这段判断上。
+fn remove_notebook_dir(base: &Path, name: &str, force: bool) -> Result<(), String> {
+    check_notebook_name(name)?;
+    let dir = base.join(name);
     if !dir.exists() {
         return Ok(());
     }
-    // 只删空目录：里面有笔记就拒绝，避免误删
-    let has_note = fs::read_dir(&dir)
-        .map_err(|e| format!("读取失败: {e}"))?
-        .flatten()
-        .any(|e| {
-            e.path().extension().and_then(|s| s.to_str()) == Some("md")
-        });
-    if has_note {
-        return Err("这个笔记本里还有笔记，先把笔记移走或删除".into());
+    if !force {
+        let has_note = fs::read_dir(&dir)
+            .map_err(|e| format!("读取失败: {e}"))?
+            .flatten()
+            .any(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"));
+        if has_note {
+            return Err("这个笔记本里还有笔记，先把笔记移走或删除".into());
+        }
     }
-    fs::remove_dir(&dir).map_err(|e| format!("删除笔记本失败: {e}"))
+    // 用 remove_dir_all：目录里可能还有 .DS_Store 之类的杂物，
+    // remove_dir 会因为「目录非空」失败，表现成点了删除没反应
+    fs::remove_dir_all(&dir).map_err(|e| format!("删除笔记本失败: {e}"))
+}
+
+#[tauri::command]
+fn delete_notebook(app: tauri::AppHandle, name: String, force: Option<bool>) -> Result<(), String> {
+    let base = dir_of(&app)?;
+    remove_notebook_dir(&base, &name, force.unwrap_or(false))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_base(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "jianji-test-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn 空的笔记本能删掉() {
+        let base = temp_base("empty");
+        fs::create_dir_all(base.join("工作")).unwrap();
+        // .DS_Store 这种杂物不该阻止删除
+        fs::write(base.join("工作/.DS_Store"), b"x").unwrap();
+        assert!(remove_notebook_dir(&base, "工作", false).is_ok());
+        assert!(!base.join("工作").exists());
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn 有笔记时非强制会拒绝() {
+        let base = temp_base("hasnote");
+        fs::create_dir_all(base.join("工作")).unwrap();
+        fs::write(base.join("工作/周报.md"), "hi").unwrap();
+        assert!(remove_notebook_dir(&base, "工作", false).is_err());
+        assert!(base.join("工作/周报.md").exists());
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn 有笔记时强制能删掉() {
+        let base = temp_base("force");
+        fs::create_dir_all(base.join("工作")).unwrap();
+        fs::write(base.join("工作/周报.md"), "hi").unwrap();
+        assert!(remove_notebook_dir(&base, "工作", true).is_ok());
+        assert!(!base.join("工作").exists());
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn 不存在的笔记本视作已删除() {
+        let base = temp_base("missing");
+        assert!(remove_notebook_dir(&base, "不存在", false).is_ok());
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn 非法名字被挡掉() {
+        let base = temp_base("bad");
+        assert!(remove_notebook_dir(&base, "../etc", true).is_err());
+        assert!(remove_notebook_dir(&base, ".hidden", true).is_err());
+        fs::remove_dir_all(&base).ok();
+    }
 }
