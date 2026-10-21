@@ -724,6 +724,58 @@ button {
   font-size: 12px;
 }
 
+/* ProseMirror 会在行内节点两侧塞辅助用的空 img，不隐藏会显示成“加载失败”的小方块 */
+.rich-body img.ProseMirror-separator {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* 边框颜色：20 色色板 + 自定义 */
+.rich-tools {
+  position: relative;
+}
+
+.color-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: repeat(5, 26px);
+  gap: 6px;
+  padding: 10px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid #e8e2d8;
+  box-shadow: 0 8px 24px rgba(50, 40, 30, 0.18);
+}
+
+.color-pop .swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  padding: 0;
+}
+
+.color-pop .swatch.on {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.color-pop .custom {
+  grid-column: 1 / -1;
+  border: 0;
+  border-radius: 6px;
+  background: #f2eee7;
+  color: #5b554b;
+  font-size: 12px;
+  padding: 5px 0;
+  cursor: pointer;
+}
+
 /* 图片工具栏：边框色按钮上的小色点 */
 .rich-tools .color-dot {
   display: inline-block;

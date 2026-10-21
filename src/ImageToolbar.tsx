@@ -2,7 +2,7 @@
  * 选中图片时顶部显示的图片工具栏：左/右/整行、裁剪、复制、边框、翻转。
  * 点回文字或空白处时，RichEditor 会切回普通文字工具栏。
  */
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Editor } from '@tiptap/core'
 import { NodeSelection } from '@tiptap/pm/state'
 import { imgAttrsFrom, readImgState, type ImgState } from './ResizableImage'
@@ -47,18 +47,16 @@ function apply(editor: Editor, sel: NonNullable<ReturnType<typeof selectedImage>
   setImageAttrs(editor, sel.from, patch)
 }
 
-/** 光标移到图片后面，方便接着打字 */
-function focusAfterImage(editor: Editor, from: number, nodeSize: number) {
-  window.setTimeout(() => {
-    try {
-      editor.chain().setTextSelection(Math.min(from + nodeSize, editor.state.doc.content.size)).focus().run()
-    } catch {
-      /* 忽略 */
-    }
-  }, 20)
-}
-
 const BORDER_STEPS = [0, 1, 2, 4, 6]
+
+/** 常用边框颜色（20 个） */
+const PALETTE = [
+  '#000000', '#4b5563', '#9ca3af', '#ffffff',
+  '#ef4444', '#b91c1c', '#f97316', '#f59e0b',
+  '#eab308', '#84cc16', '#22c55e', '#15803d',
+  '#14b8a6', '#0ea5e9', '#3b82f6', '#6366f1',
+  '#a855f7', '#ec4899', '#92400e', '#f5e6c8',
+]
 
 export function ImageToolbar({
   editor,
@@ -80,7 +78,7 @@ export function ImageToolbar({
       width = body ? Math.round(body.getBoundingClientRect().width * 0.5) : 360
     }
     apply(editor, sel, { align, width: align ? width : null })
-    if (align) focusAfterImage(editor, sel.from, sel.node.nodeSize)
+    // 保持图片选中，工具栏停在图片态（不要把光标挪走）
   }
 
   const [copied, setCopied] = useState('')
@@ -204,24 +202,56 @@ function ColorButton({
   st: ImgState
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const [open, setOpen] = useState(false)
+
+  const pick = (color: string) => {
+    apply(editor, sel, { borderColor: color, borderWidth: st.borderWidth ?? 2 })
+    setOpen(false)
+  }
+
   return (
     <>
       <button
         type="button"
-        className={st.borderColor && st.borderWidth ? 'on' : ''}
+        className={open || (st.borderColor && st.borderWidth) ? 'on' : ''}
         title="设置边框颜色"
         onMouseDown={(e) => e.preventDefault()}
-        onClick={() => inputRef.current?.click()}
+        onClick={() => setOpen((v) => !v)}
       >
         边框色
         {st.borderColor && <span className="color-dot" style={{ background: st.borderColor }} />}
       </button>
+      {open && (
+        <div className="color-pop" onMouseDown={(e) => e.preventDefault()}>
+          {PALETTE.map((c) => (
+            <button
+              key={c}
+              type="button"
+              className={`swatch${st.borderColor === c ? ' on' : ''}`}
+              style={{ background: c }}
+              title={c}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => pick(c)}
+            />
+          ))}
+          <button
+            type="button"
+            className="custom"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => inputRef.current?.click()}
+          >
+            自定义…
+          </button>
+        </div>
+      )}
       <input
         ref={inputRef}
         type="color"
         hidden
         value={st.borderColor ?? '#3a362e'}
-        onChange={(e) => apply(editor, sel, { borderColor: e.target.value, borderWidth: st.borderWidth ?? 2 })}
+        onChange={(e) => {
+          pick(e.target.value)
+        }}
       />
     </>
   )
@@ -242,7 +272,14 @@ export function CropModal({
 }) {
   const boxRef = useRef<HTMLDivElement | null>(null)
   const [rect, setRect] = useState<Rect | null>(null)
+  const [loaded, setLoaded] = useState(false)
   const dragStart = useRef<{ x: number; y: number } | null>(null)
+
+  // data URL 有时在 React 挂上 onLoad 之前就已经加载完了，补一枪检查
+  useEffect(() => {
+    const img = boxRef.current?.querySelector('img')
+    if (img?.complete && img.naturalWidth > 0) setLoaded(true)
+  }, [])
 
   const rel = (e: React.MouseEvent | MouseEvent) => {
     const box = boxRef.current!.getBoundingClientRect()
@@ -272,7 +309,9 @@ export function CropModal({
 
   const doApply = () => {
     const img = boxRef.current?.querySelector('img')
-    if (!img || !rect || rect.w < 8 || rect.h < 8) {
+    // 图还没加载完（naturalWidth 为 0）就裁，只会得到一张废图，宁可不做
+    if (!img || !loaded || !img.naturalWidth || !rect || rect.w < 8 || rect.h < 8) {
+      if (!loaded) return
       onCancel()
       return
     }
@@ -293,14 +332,14 @@ export function CropModal({
       <div className="crop-panel">
         <div className="crop-hint">在图上拖一个框，只保留框里的部分</div>
         <div className="crop-box" ref={boxRef} onMouseDown={start}>
-          <img src={src} draggable={false} alt="" />
+          <img src={src} draggable={false} alt="" onLoad={() => setLoaded(true)} />
           {rect && rect.w > 2 && rect.h > 2 && (
             <div className="crop-rect" style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }} />
           )}
         </div>
         <div className="crop-actions">
-          <button type="button" onClick={doApply}>
-            应用裁剪
+          <button type="button" disabled={!loaded} title={loaded ? '' : '图片加载中…'} onClick={doApply}>
+            {loaded ? '应用裁剪' : '加载中…'}
           </button>
           <button type="button" className="ghost" onClick={onCancel}>
             取消

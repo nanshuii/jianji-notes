@@ -144,6 +144,13 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
     }
   }, [editor, insertFiles, pickImage, onReady])
 
+  // 诊断用：把编辑器实例挂出来，自动化测试和排障时能直接读选区状态
+  useEffect(() => {
+    if (editor) {
+      ;(window as unknown as Record<string, unknown>).__ed = editor
+    }
+  }, [editor])
+
   if (!editor) return <div className="rich-loading">正在打开…</div>
 
   // 选中的是图片时，顶部工具栏换成图片工具；点文字/空白自动切回来
@@ -166,6 +173,16 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
           onCancel={() => setCrop(null)}
           onApply={(dataUrl) => {
             const cur = editor.state.doc.nodeAt(crop.pos)
+            console.log(
+              '[crop-debug] pos=',
+              crop.pos,
+              'node=',
+              cur?.type.name,
+              'oldSrcLen=',
+              String(cur?.attrs.src ?? '').length,
+              'newSrcLen=',
+              dataUrl.length,
+            )
             if (cur && cur.type.name === 'image') {
               editor.view.dispatch(
                 editor.state.tr.setNodeMarkup(crop.pos, undefined, {
