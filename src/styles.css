@@ -1565,6 +1565,12 @@ button {
   color: #9c4a2c;
 }
 
+/* 重要事项：偏红的橙 */
+.tag.is-focus {
+  background: #fdecec;
+  color: #b0364a;
+}
+
 .tag-x {
   border: 0;
   background: transparent;
@@ -1622,6 +1628,11 @@ button {
   background: var(--accent-soft);
 }
 
+.tag-mini.is-focus {
+  color: #b0364a;
+  background: #fdecec;
+}
+
 /* 左栏的标记分组 */
 .rail-tags {
   max-height: 170px;
@@ -1635,6 +1646,11 @@ button {
 
 .dot.is-ledger {
   background: var(--accent);
+  opacity: 0.55;
+}
+
+.dot.is-focus {
+  background: #b0364a;
   opacity: 0.55;
 }
 
@@ -1663,10 +1679,15 @@ button {
 }
 
 .new-buttons .new-more {
-  width: 26px;
-  padding: 0;
+  flex: 0 0 auto;
+  padding: 0 10px;
   color: var(--sub);
-  font-size: 10px;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.new-buttons .new-more:hover {
+  color: var(--text);
 }
 
 /* 弹窗里已有的标记 */
@@ -2012,13 +2033,64 @@ button {
   gap: 6px;
 }
 
+/* 日期行：点一下把这天收起来（默认展开） */
 .ld-day-head {
   display: flex;
   gap: 8px;
   align-items: baseline;
-  padding: 0 4px;
+  width: 100%;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
   font-size: 11.5px;
   color: var(--sub);
+  cursor: pointer;
+  text-align: left;
+}
+
+.ld-day-head:hover {
+  background: var(--panel);
+  color: var(--text);
+}
+
+.ld-day.closed {
+  gap: 0;
+}
+
+.ld-fold {
+  width: 10px;
+  font-size: 9px;
+  color: var(--sub);
+}
+
+.ld-day-sum {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.ld-list-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px;
+  font-size: 11.5px;
+}
+
+.ld-collapse,
+.fc-collapse {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11.5px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.ld-collapse:hover,
+.fc-collapse:hover {
+  background: var(--accent-soft);
 }
 
 .ld-item {
@@ -2172,4 +2244,200 @@ button {
   font-size: 12px;
   outline: none;
   box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* ================= 重要事项 ================= */
+
+/* 重要事项的总览是 4 个格子：共 / 待办 / 逾期 / 7 天内 */
+.focus .ld-sum {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.focus .ld-sum b {
+  font-size: 19px;
+}
+
+.fc-title {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-size: 18px;
+  color: var(--text);
+  padding: 2px 0;
+  font-family: inherit;
+}
+
+.fc-title::placeholder {
+  color: #d8d2c8;
+}
+
+.fc-open {
+  color: #b0364a;
+}
+
+.fc-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.fc-month {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fc-month.closed {
+  gap: 0;
+}
+
+.fc-month-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 12px;
+  color: var(--sub);
+  cursor: pointer;
+  text-align: left;
+}
+
+.fc-month-head:hover {
+  background: var(--panel);
+  color: var(--text);
+}
+
+.fc-month-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.fc-items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fc-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.fc-item.done {
+  background: #fbfaf8;
+}
+
+/* 过了日子还没做的，左边加一条红杠 */
+.fc-item.overdue {
+  border-color: #f0d9d3;
+  background: #fffdfc;
+  box-shadow: inset 2px 0 0 #d3573f;
+}
+
+.fc-item.overdue .fc-item-title {
+  color: #a83b28;
+}
+
+.fc-item.done .fc-item-title {
+  color: var(--sub);
+  text-decoration: line-through;
+}
+
+.fc-check {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border: 1.5px solid #cfc8bd;
+  border-radius: 50%;
+  background: #fff;
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.fc-item.done .fc-check {
+  background: var(--green);
+  border-color: var(--green);
+}
+
+.fc-check:hover {
+  border-color: var(--accent);
+}
+
+.fc-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.fc-item-title {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fc-level {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--sub);
+  white-space: nowrap;
+}
+
+.fc-level.urgent {
+  background: #fdecec;
+  color: #b0364a;
+}
+
+.fc-level.important {
+  background: var(--accent-soft);
+  color: #9c4a2c;
+}
+
+.fc-level.normal {
+  background: var(--panel);
+  color: var(--sub);
+}
+
+.fc-item-date {
+  font-size: 11.5px;
+  color: var(--sub);
+  white-space: nowrap;
+}
+
+.fc-away {
+  font-size: 11.5px;
+  color: var(--sub);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  min-width: 62px;
+  text-align: right;
+}
+
+.fc-away.late {
+  color: #c0392b;
+}
+
+/* 完成按钮在 hover 前也要看得见 */
+.fc-item:hover .ld-item-del {
+  opacity: 1;
 }

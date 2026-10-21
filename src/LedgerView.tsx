@@ -49,6 +49,8 @@ export function LedgerView({
   const [rawOpen, setRawOpen] = useState(false)
   const [raw, setRaw] = useState(note.body)
   const [flash, setFlash] = useState('')
+  /** 收起来的日期（YYYY-MM-DD）；默认全部展开 */
+  const [closed, setClosed] = useState<string[]>([])
 
   const amountRef = useRef<HTMLInputElement | null>(null)
 
@@ -92,6 +94,7 @@ export function LedgerView({
     setAmount('')
     setMemo('')
     setYm(monthOf(date))
+    setClosed((prev) => prev.filter((d) => d !== date)) // 记的这天要是收着的，展开它
     setFlash(`已记下 ${type === 'expense' ? '支出' : '收入'} ¥${money(entry.amount)}`)
     window.setTimeout(() => setFlash(''), 1600)
     amountRef.current?.focus()
@@ -120,6 +123,27 @@ export function LedgerView({
   }
 
   const isThisMonth = ym === monthOf(todayISO())
+
+  // 全部收起 / 全部展开：只影响当前这个月的分组
+  const allClosed = groups.length > 0 && groups.every((g) => closed.includes(g.date))
+  const toggleDay = (d: string) =>
+    setClosed((prev) => (prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d]))
+
+  const daySum = (items: Entry[]) => {
+    let out = 0
+    let in_ = 0
+    for (const e of items) {
+      if (e.type === 'income') in_ += e.amount
+      else out += e.amount
+    }
+    return (
+      <>
+        {out > 0 && <span className="ld-expense">-¥{money(out)}</span>}
+        {out > 0 && in_ > 0 && ' '}
+        {in_ > 0 && <span className="ld-income">+¥{money(in_)}</span>}
+      </>
+    )
+  }
 
   return (
     <div className="ledger">
@@ -295,34 +319,55 @@ export function LedgerView({
 
       {/* ---------- 流水 ---------- */}
       <div className="ld-list">
+        {groups.length > 0 && (
+          <div className="ld-list-bar">
+            <span className="ld-muted">共 {stat.count} 笔</span>
+            <button
+              className="ld-collapse"
+              onClick={() => setClosed(allClosed ? [] : groups.map((g) => g.date))}
+            >
+              {allClosed ? '全部展开' : '全部收起'}
+            </button>
+          </div>
+        )}
         {groups.length === 0 ? (
           <div className="ld-empty">
             {stat.count === 0 ? '这个月还没有记录，上面记一笔试试' : '这个月没有记录'}
           </div>
         ) : (
-          groups.map((g) => (
-            <div key={g.date} className="ld-day">
-              <div className="ld-day-head">
-                <span>{g.date}</span>
-                <span className="ld-muted">{weekday(g.date)}</span>
+          groups.map((g) => {
+            const open = !closed.includes(g.date)
+            return (
+              <div key={g.date} className={`ld-day${open ? '' : ' closed'}`}>
+                <button
+                  className="ld-day-head"
+                  onClick={() => toggleDay(g.date)}
+                  title={open ? '收起这一天' : '展开这一天'}
+                >
+                  <span className="ld-fold">{open ? '▾' : '▸'}</span>
+                  <span>{g.date}</span>
+                  <span className="ld-muted">{weekday(g.date)}</span>
+                  <span className="ld-day-sum">{daySum(g.items.map((x) => x.e))}</span>
+                </button>
+                {open &&
+                  g.items.map(({ e, i }) => (
+                    <div key={`${e.date}-${i}`} className="ld-item">
+                      <span className="ld-item-ico">{catIcon(e.category)}</span>
+                      <span className="ld-item-main">
+                        <span className="ld-item-cat">{e.category}</span>
+                        {e.note && <span className="ld-item-note">{e.note}</span>}
+                      </span>
+                      <span className={`ld-item-amt ${e.type}`}>
+                        {e.type === 'expense' ? '-' : '+'}¥{money(e.amount)}
+                      </span>
+                      <button className="ld-item-del" title="删掉这笔" onClick={() => remove(i)}>
+                        ×
+                      </button>
+                    </div>
+                  ))}
               </div>
-              {g.items.map(({ e, i }) => (
-                <div key={`${e.date}-${i}`} className="ld-item">
-                  <span className="ld-item-ico">{catIcon(e.category)}</span>
-                  <span className="ld-item-main">
-                    <span className="ld-item-cat">{e.category}</span>
-                    {e.note && <span className="ld-item-note">{e.note}</span>}
-                  </span>
-                  <span className={`ld-item-amt ${e.type}`}>
-                    {e.type === 'expense' ? '-' : '+'}¥{money(e.amount)}
-                  </span>
-                  <button className="ld-item-del" title="删掉这笔" onClick={() => remove(i)}>
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-          ))
+            )
+          })
         )}
       </div>
 

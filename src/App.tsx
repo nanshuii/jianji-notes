@@ -3,6 +3,8 @@ import { getStorage, isDesktop } from './storage'
 import {
   type Note,
   LEDGER_TAG,
+  FOCUS_TAG,
+  BUILTIN_TAGS,
   allTags,
   baseName,
   formatDate,
@@ -17,7 +19,9 @@ import {
   wordCount,
 } from './types'
 import { LedgerView } from './LedgerView'
+import { FocusView } from './FocusView'
 import { defaultLedgerTitle, ledgerSummary, parseLedger, serializeLedger } from './ledger'
+import { defaultFocusTitle, focusSummary, parseFocus, serializeFocus } from './focus'
 import { RichEditor, type RichEditorHandle } from './RichEditor'
 import MANUAL_BODY from './manual.md?raw'
 
@@ -44,8 +48,15 @@ const WELCOME_BODY = `欢迎。这是一个完全本地运行的笔记应用，�
 
 ## 记账
 
-左边有个「记账本」，已经帮你建好并置顶了。点「＋ 新建笔记」右边的小箭头 ▾，
+左边有个「记账本」，已经帮你建好并置顶了。点「＋ 新建笔记」右边的「更多 ▾」，
 选「记账笔记」就能开始记账：选支出还是收入、填金额、点分类，一笔就记上了。
+流水按天分组，点日期那一行能把当天收起来。
+
+## 重要事项
+
+同一个「更多 ▾」里选「重要事项」，会建到置顶的「重要事项」笔记本里。
+写要做什么、定个日期，打开就按月份排好（2026年10月…），还写着「还有 N 天」，
+过了日子还没做的会标红。做完了点前面的圈打勾。
 
 ## 标记
 
@@ -96,22 +107,29 @@ function writePinnedNbs(list: string[]) {
   }
 }
 
-/* ---------------- 记账本 ---------------- */
+/* ---------------- 内置笔记本：记账本、重要事项 ---------------- */
 /** 记账笔记默认落在这个笔记本里 */
 const LEDGER_NB = '记账本'
-const LEDGER_SEEDED_KEY = 'jianji.ledger.v1'
+/** 重要事项笔记默认落在这个笔记本里 */
+const FOCUS_NB = '重要事项'
 
-function wasLedgerSeeded(): boolean {
+/** 两个内置笔记本在左栏的固定顺序：记账本在上、重要事项紧跟着 */
+const BUILTIN_NBS = [LEDGER_NB, FOCUS_NB]
+
+const LEDGER_SEEDED_KEY = 'jianji.ledger.v1'
+const FOCUS_SEEDED_KEY = 'jianji.focus.v1'
+
+function wasSeeded(key: string): boolean {
   try {
-    return localStorage.getItem(LEDGER_SEEDED_KEY) === '1'
+    return localStorage.getItem(key) === '1'
   } catch {
     return false
   }
 }
 
-function markLedgerSeeded() {
+function markSeeded(key: string) {
   try {
-    localStorage.setItem(LEDGER_SEEDED_KEY, '1')
+    localStorage.setItem(key, '1')
   } catch {
     /* 同上 */
   }
@@ -119,6 +137,12 @@ function markLedgerSeeded() {
 
 function byUpdated(a: Note, b: Note): number {
   return Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt
+}
+
+/** 内置笔记本排最前（记账本 → 重要事项），其余排后面 */
+function nbRank(name: string): number {
+  const i = BUILTIN_NBS.indexOf(name)
+  return i < 0 ? BUILTIN_NBS.length : i
 }
 
 /** 全部视图用 null，未分类用空串 */
@@ -206,6 +230,7 @@ export default function App() {
               pinned: false,
               tags: [],
               ledger: false,
+              focus: false,
             },
             {
               file: toFileName(WELCOME_TITLE),
@@ -217,6 +242,7 @@ export default function App() {
               pinned: false,
               tags: [],
               ledger: false,
+              focus: false,
             },
           ]
           for (const s of seeds) {
@@ -234,24 +260,32 @@ export default function App() {
         if (cancelled) return
         setNotes(loaded)
 
-        // 记账本：第一次运行自动建好并置顶；用户自己删掉后不再反复重建
+        // 内置笔记本（记账本、重要事项）：第一次运行自动建好并置顶；
+        // 用户自己删掉后不再反复重建
         let allNbs = nbs
         let pins = readPinnedNbs()
-        if (!wasLedgerSeeded()) {
-          if (!allNbs.includes(LEDGER_NB)) {
+        for (const [nb, key] of [
+          [LEDGER_NB, LEDGER_SEEDED_KEY],
+          [FOCUS_NB, FOCUS_SEEDED_KEY],
+        ] as const) {
+          if (wasSeeded(key)) continue
+          if (!allNbs.includes(nb)) {
             try {
-              await storage.createNotebook(LEDGER_NB)
+              await storage.createNotebook(nb)
             } catch {
               /* 已经存在就算了 */
             }
-            allNbs = [...new Set([...allNbs, LEDGER_NB])].sort()
+            allNbs = [...new Set([...allNbs, nb])].sort()
           }
-          if (!pins.includes(LEDGER_NB)) {
-            pins = [...pins, LEDGER_NB]
+          if (!pins.includes(nb)) {
+            // 内置的排在置顶区最前面，顺序按 BUILTIN_NBS
+            pins = [...pins.filter((p) => p !== nb), nb]
             writePinnedNbs(pins)
           }
-          markLedgerSeeded()
+          markSeeded(key)
         }
+        // 记账本在前、重要事项在后，剩下的保持原样
+        pins = [...pins].sort((a, b) => nbRank(a) - nbRank(b))
         setNotebooks(allNbs)
         setPinnedNbs(pins.filter((n) => allNbs.includes(n)))
         setActiveFile(loaded[0]?.file ?? null)
@@ -400,26 +434,34 @@ export default function App() {
 
   /**
    * 新建笔记。
-   * kind='ledger' 时建的是记账笔记：自动进「记账本」、带记账标记、正文是一张空的流水表。
+   * - kind='ledger'：记账笔记，进「记账本」、带「记账」标记、正文是空的流水表
+   * - kind='focus'：重要事项笔记，进「重要事项」、带「重要事项」标记、正文是空的事项表
+   * - kind='note'：普通笔记
    */
   const createNote = useCallback(
-    async (kind: 'note' | 'ledger' = 'note') => {
+    async (kind: 'note' | 'ledger' | 'focus' = 'note') => {
       const now = Date.now()
       const isLedger = kind === 'ledger'
-      let nb = isLedger ? LEDGER_NB : (scope ?? '')
+      const isFocus = kind === 'focus'
+      const target = isLedger ? LEDGER_NB : isFocus ? FOCUS_NB : ''
+      const nb = isLedger || isFocus ? target : (scope ?? '')
 
-      // 记账本被删掉了就顺手补回来
-      if (isLedger && !notebooks.includes(LEDGER_NB)) {
+      // 内置笔记本被删掉了就顺手补回来
+      if ((isLedger || isFocus) && !notebooks.includes(target)) {
         try {
-          await storage.createNotebook(LEDGER_NB)
+          await storage.createNotebook(target)
         } catch {
           /* 已经有同名目录就不再建 */
         }
-        setNotebooks((prev) => [...new Set([...prev, LEDGER_NB])].sort())
+        setNotebooks((prev) => [...new Set([...prev, target])].sort())
       }
 
-      // 默认标题：普通笔记用当前时间，记账笔记用「记账 2026-10」
-      const base = isLedger ? defaultLedgerTitle(now) : stampTitle(now)
+      // 默认标题：普通笔记用当前时间，记账/重要事项用「记账 2026-10」「重要事项 2026-10」
+      const base = isLedger
+        ? defaultLedgerTitle(now)
+        : isFocus
+          ? defaultFocusTitle(now)
+          : stampTitle(now)
       const taken = new Set(notesRef.current.map((n) => n.file))
       let name = toFileName(base)
       let i = 2
@@ -432,12 +474,17 @@ export default function App() {
         file,
         notebook: nb,
         title: base,
-        body: isLedger ? serializeLedger({ entries: [], extra: '' }) : '',
+        body: isLedger
+          ? serializeLedger({ entries: [], extra: '' })
+          : isFocus
+            ? serializeFocus({ items: [], extra: '' })
+            : '',
         createdAt: now,
         updatedAt: now,
         pinned: false,
         tags: [],
         ledger: isLedger,
+        focus: isFocus,
       }
       try {
         await storage.save(file, serializeNote(note))
@@ -449,10 +496,10 @@ export default function App() {
       setTagFilter(null)
       openNote(file)
       // 在「全部」里新建会落到未分类，把视图跟过去，免得找不到
-      if (isLedger) setScope(LEDGER_NB)
+      if (isLedger || isFocus) setScope(target)
       else if (scope === null) setScope('')
       setQuery('')
-      if (!isLedger) window.setTimeout(() => richRef.current?.focus(), 60)
+      if (!isLedger && !isFocus) window.setTimeout(() => richRef.current?.focus(), 60)
     },
     [storage, scope, openNote, notebooks],
   )
@@ -520,7 +567,7 @@ export default function App() {
   /** 给某篇笔记加标记（可以一次加好几个，用逗号分隔） */
   const addTags = useCallback(
     (file: string, raw: string) => {
-      const wanted = splitTags(raw).filter((t) => t !== LEDGER_TAG)
+      const wanted = splitTags(raw).filter((t) => !BUILTIN_TAGS.includes(t))
       if (wanted.length === 0) return
       const note = notesRef.current.find((n) => n.file === file)
       if (!note) return
@@ -719,24 +766,31 @@ export default function App() {
     return { map, uncategorized }
   }, [notes])
 
-  /** 所有标记及使用次数（含内置的「记账」） */
+  /** 所有标记及使用次数（含内置的「记账」「重要事项」） */
   const tagCounts = useMemo(() => {
     const m = new Map<string, number>()
     for (const n of notes) {
       for (const t of allTags(n)) m.set(t, (m.get(t) ?? 0) + 1)
     }
+    // 内置标记排最前（记账 → 重要事项），其余按用得多得排
+    const rank = (t: string) => {
+      const i = BUILTIN_TAGS.indexOf(t)
+      return i < 0 ? BUILTIN_TAGS.length : i
+    }
     return [...m.entries()].sort(
-      (a, b) => Number(b[0] === LEDGER_TAG) - Number(a[0] === LEDGER_TAG) ||
-        b[1] - a[1] ||
-        a[0].localeCompare(b[0], 'zh-Hans-CN'),
+      (a, b) =>
+        rank(a[0]) - rank(b[0]) || b[1] - a[1] || a[0].localeCompare(b[0], 'zh-Hans-CN'),
     )
   }, [notes])
 
-  /** 置顶的笔记本排前面，其余按名称 */
+  /** 置顶的排前面；里面按「记账本 → 重要事项 → 其他」再按名称 */
   const orderedNotebooks = useMemo(() => {
     const pin = new Set(pinnedNbs)
     return [...notebooks].sort(
-      (a, b) => Number(pin.has(b)) - Number(pin.has(a)) || a.localeCompare(b, 'zh-Hans-CN'),
+      (a, b) =>
+        Number(pin.has(b)) - Number(pin.has(a)) ||
+        nbRank(a) - nbRank(b) ||
+        a.localeCompare(b, 'zh-Hans-CN'),
     )
   }, [notebooks, pinnedNbs])
 
@@ -904,8 +958,8 @@ export default function App() {
                 }}
                 title={`只看带「${t}」标记的笔记`}
               >
-                <span className={`rail-ico${t === LEDGER_TAG ? ' pinned' : ''}`}>
-                  {t === LEDGER_TAG ? '¥' : '#'}
+                <span className={`rail-ico${BUILTIN_TAGS.includes(t) ? ' pinned' : ''}`}>
+                  {t === LEDGER_TAG ? '¥' : t === FOCUS_TAG ? '⚑' : '#'}
                 </span>
                 <span className="rail-name">{t}</span>
                 <b className="rail-count">{c}</b>
@@ -973,13 +1027,13 @@ export default function App() {
           </button>
           <button
             className="new-more"
-            title="新建记账笔记（⌘⇧N）"
+            title="更多新建：记账笔记（⌘⇧N）、重要事项"
             onClick={(e) => {
               const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
-              setNewMenu({ x: r.right - 168, y: r.bottom + 6 })
+              setNewMenu({ x: Math.max(6, r.right - 200), y: r.bottom + 6 })
             }}
           >
-            ▾
+            更多 ▾
           </button>
         </div>
 
@@ -993,8 +1047,13 @@ export default function App() {
             // 有待办的笔记显示完成数，剩下的照常显示摘要（都走缓存，不每次重算）
             const st = statsOf(n.body)
             const tags = allTags(n)
-            // 记账笔记的正文是一张表，摘要改成「本月支出/收入」
-            const sub = n.ledger ? ledgerSummary(n.body) : st.sub
+            // 记账/重要事项的正文是一张表，摘要换成各自的概览
+            const special = n.ledger || n.focus
+            const sub = n.ledger
+              ? ledgerSummary(n.body)
+              : n.focus
+                ? focusSummary(n.body)
+                : st.sub
             return (
               <button
                 key={n.file}
@@ -1010,25 +1069,30 @@ export default function App() {
                   <span
                     className={`dot${st.total > 0 && st.done < st.total ? ' open' : ''}${
                       n.ledger ? ' is-ledger' : ''
-                    }`}
+                    }${n.focus ? ' is-focus' : ''}`}
                   />
                   <span className="note-title">{n.title || '未命名'}</span>
                   {n.pinned && <span className="pin">·</span>}
                   <span className="note-time">{formatDate(n.updatedAt)}</span>
                 </div>
                 <div className="note-sub">
-                  {!n.ledger && st.total > 0 && (
+                  {!special && st.total > 0 && (
                     <span className="note-prog">
                       {st.done}/{st.total}
                     </span>
                   )}
-                  {!n.ledger && st.total > 0 && st.sub ? ' · ' : ''}
+                  {!special && st.total > 0 && st.sub ? ' · ' : ''}
                   {sub || (st.total > 0 ? '' : '空白')}
                 </div>
                 {tags.length > 0 && (
                   <div className="note-tags">
                     {tags.slice(0, 3).map((t) => (
-                      <span key={t} className={`tag-mini${t === LEDGER_TAG ? ' is-ledger' : ''}`}>
+                      <span
+                        key={t}
+                        className={`tag-mini${t === LEDGER_TAG ? ' is-ledger' : ''}${
+                          t === FOCUS_TAG ? ' is-focus' : ''
+                        }`}
+                      >
                         {t}
                       </span>
                     ))}
@@ -1073,9 +1137,14 @@ export default function App() {
               />
               <div className="tag-row">
                 {allTags(active).map((t) => (
-                  <span key={t} className={`tag${t === LEDGER_TAG ? ' is-ledger' : ''}`}>
+                  <span
+                    key={t}
+                    className={`tag${t === LEDGER_TAG ? ' is-ledger' : ''}${
+                      t === FOCUS_TAG ? ' is-focus' : ''
+                    }`}
+                  >
                     {t}
-                    {t !== LEDGER_TAG && (
+                    {!BUILTIN_TAGS.includes(t) && (
                       <button
                         className="tag-x"
                         title="去掉这个标记"
@@ -1112,10 +1181,12 @@ export default function App() {
                   <span>{formatDate(active.updatedAt)}</span>
                   {active.ledger ? (
                     <span>{parseLedger(active.body).entries.length} 笔</span>
+                  ) : active.focus ? (
+                    <span>{parseFocus(active.body).items.length} 项</span>
                   ) : (
                     <span>{activeStat?.words ?? 0} 字</span>
                   )}
-                  {!active.ledger && activeStat && activeStat.total > 0 && (
+                  {!active.ledger && !active.focus && activeStat && activeStat.total > 0 && (
                     <span>
                       待办 {activeStat.done}/{activeStat.total}
                     </span>
@@ -1141,9 +1212,17 @@ export default function App() {
               </div>
             </header>
 
-            <section className={`editor-body${active.ledger ? ' ledger-body' : ''}`}>
+            <section
+              className={`editor-body${active.ledger || active.focus ? ' ledger-body' : ''}`}
+            >
               {active.ledger ? (
                 <LedgerView
+                  key={active.file}
+                  note={active}
+                  onChange={(body) => patch({ body })}
+                />
+              ) : active.focus ? (
+                <FocusView
                   key={active.file}
                   note={active}
                   onChange={(body) => patch({ body })}
@@ -1178,6 +1257,10 @@ export default function App() {
             {
               label: '记账笔记（存到「记账本」）',
               onClick: () => void createNote('ledger'),
+            },
+            {
+              label: '重要事项（存到「重要事项」）',
+              onClick: () => void createNote('focus'),
             },
           ]}
         />
@@ -1300,7 +1383,7 @@ export default function App() {
           defaultValue={prompt.value}
           suggestions={
             prompt.mode === 'tag'
-              ? tagCounts.map(([t]) => t).filter((t) => t !== LEDGER_TAG)
+              ? tagCounts.map(([t]) => t).filter((t) => !BUILTIN_TAGS.includes(t))
               : undefined
           }
           onCancel={() => setPrompt(null)}
