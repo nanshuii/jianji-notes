@@ -62,8 +62,12 @@ export function FocusView({
   /** 正在给哪一条填失败原因 */
   const [failFor, setFailFor] = useState<number | null>(null)
   const [failText, setFailText] = useState('')
+  /** 正在给哪一条改名（只有未完成的事才能改） */
+  const [editFor, setEditFor] = useState<number | null>(null)
+  const [editText, setEditText] = useState('')
   const titleRef = useRef<HTMLInputElement | null>(null)
   const subRef = useRef<HTMLInputElement | null>(null)
+  const editRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     if (!rawOpen) setRaw(note.body)
@@ -72,6 +76,13 @@ export function FocusView({
   useEffect(() => {
     if (subFor !== null) subRef.current?.focus()
   }, [subFor])
+
+  useEffect(() => {
+    if (editFor !== null) {
+      editRef.current?.focus()
+      editRef.current?.select()
+    }
+  }, [editFor])
 
   const stat = useMemo(() => focusStat(sheet.items), [sheet.items])
   const thisMonth = useMemo(
@@ -167,6 +178,28 @@ export function FocusView({
     }
   }
 
+  /** 已经做完的事就不给改名了，免得改完了对不上账 */
+  const canRename = (i: number) => sheet.items[i]?.status !== 'done'
+
+  const startRename = (i: number) => {
+    if (!canRename(i)) return
+    setEditFor(i)
+    setEditText(sheet.items[i].title)
+  }
+
+  /** 空名字不算改名，原样退出 */
+  const commitRename = (i: number) => {
+    const name = editText.trim()
+    if (name && name !== sheet.items[i]?.title) patch(i, { title: name })
+    setEditFor(null)
+    setEditText('')
+  }
+
+  const cancelRename = () => {
+    setEditFor(null)
+    setEditText('')
+  }
+
   const addSub = (i: number) => {
     const name = subText.trim()
     if (!name) {
@@ -197,6 +230,7 @@ export function FocusView({
     save(sheet.items.filter((_, k) => k !== i))
     if (subFor === i) setSubFor(null)
     if (failFor === i) setFailFor(null)
+    if (editFor === i) cancelRename()
   }
 
   const toggleMonth = (ym: string) => {
@@ -394,8 +428,37 @@ export function FocusView({
                               {done ? '✓' : ''}
                             </button>
                             <span className="fc-item-main">
-                              <span className="fc-item-title">{it.title}</span>
-                              {it.note && <span className="ld-item-note">{it.note}</span>}
+                              {editFor === i ? (
+                                <input
+                                  ref={editRef}
+                                  className="fc-title-input"
+                                  value={editText}
+                                  aria-label="改名字"
+                                  spellCheck={false}
+                                  onChange={(e) => setEditText(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault()
+                                      commitRename(i)
+                                    } else if (e.key === 'Escape') {
+                                      e.preventDefault()
+                                      cancelRename()
+                                    }
+                                  }}
+                                  onBlur={() => commitRename(i)}
+                                />
+                              ) : (
+                                <span
+                                  className="fc-item-title"
+                                  title={canRename(i) ? '双击改名' : undefined}
+                                  onDoubleClick={() => startRename(i)}
+                                >
+                                  {it.title}
+                                </span>
+                              )}
+                              {it.note && editFor !== i && (
+                                <span className="ld-item-note">{it.note}</span>
+                              )}
                             </span>
                             {isStep && (
                               <span
@@ -430,6 +493,15 @@ export function FocusView({
                               </span>
                             )}
                             <span className="fc-acts">
+                              {!done && (
+                                <button
+                                  className="fc-rename"
+                                  title="改名字"
+                                  onClick={() => startRename(i)}
+                                >
+                                  ✎
+                                </button>
+                              )}
                               {failed ? (
                                 <button
                                   className="fc-undo"
