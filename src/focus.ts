@@ -288,41 +288,37 @@ export interface FocusMonth {
   open: number
 }
 
-/** 没定日期的那组用空字符串当 key */
-export const NO_DATE = ''
-
 /** 排序优先级：未完成最优先 → 失败第二 → 已完成第三 */
 function statusRank(it: FocusItem): number {
   return it.status === 'open' ? 0 : it.status === 'failed' ? 1 : 2
 }
 
 /**
- * 按月份分组：没定日期的单独一组排最前面（刚记下来的先看得到），
- * 有日期的按月份从早到晚（2026年9月、2026年10月…）。
- * 同一组里：未完成 → 失败 → 已完成，再按日期从早到晚。
+ * 按月份分组，月份从早到晚（2026年9月、2026年10月…）。
+ * 没定日期的不单独列一组，直接算在**当前月**里，并且排在这一组的最前面。
+ * 同一组里：未完成 → 失败 → 已完成，再按日期从早到晚（没日期的排最前）。
  */
-export function groupByMonth(items: FocusItem[]): FocusMonth[] {
+export function groupByMonth(items: FocusItem[], today: string = todayISO()): FocusMonth[] {
+  const nowMonth = monthOf(today)
   const map = new Map<string, FocusItem[]>()
   for (const it of items) {
-    const key = hasDate(it) ? monthOf(it.date) : NO_DATE
+    const key = hasDate(it) ? monthOf(it.date) : nowMonth
     const list = map.get(key)
     if (list) list.push(it)
     else map.set(key, [it])
   }
   return [...map.entries()]
-    .sort((a, b) => {
-      if (a[0] === NO_DATE) return -1
-      if (b[0] === NO_DATE) return 1
-      return a[0] < b[0] ? -1 : 1
-    })
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
     .map(([ym, list]) => {
       const sorted = [...list].sort(
         (a, b) =>
-          statusRank(a) - statusRank(b) || (a.date < b.date ? -1 : a.date > b.date ? 1 : 0),
+          statusRank(a) - statusRank(b) ||
+          Number(hasDate(a)) - Number(hasDate(b)) ||
+          (a.date < b.date ? -1 : a.date > b.date ? 1 : 0),
       )
       return {
         ym,
-        label: ym ? monthTitle(ym) : '未设日期',
+        label: monthTitle(ym),
         items: sorted,
         open: sorted.filter((i) => i.status === 'open').length,
       }

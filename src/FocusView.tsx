@@ -137,8 +137,8 @@ export function FocusView({
       reason: '',
     }
     save([...sheet.items, item])
-    // 新记的一定在「未设日期」那组，别让它被收起来看不见
-    setClosed((prev) => prev.filter((m) => m !== ''))
+    // 没定日期的算在本月那组，别让它被收起来看不见
+    setClosed((prev) => prev.filter((m) => m !== monthOf(todayISO())))
     setTitle('')
     setMemo('')
     setFlash(steps > 0 ? `已记下 · 进度类 ${steps} 步` : '已记下')
@@ -484,7 +484,9 @@ export function FocusView({
                               title={dated ? '改日期' : '给这件事定个日期'}
                               onChange={(iso) => {
                                 patch(i, { date: iso })
-                                if (iso) setClosed((prev) => prev.filter((m) => m !== monthOf(iso)))
+                                // 定到哪个月就展开哪个月；清掉日期则回到本月
+                                const target = iso ? monthOf(iso) : monthOf(todayISO())
+                                setClosed((prev) => prev.filter((m) => m !== target))
                               }}
                             />
                             {dated && (
