@@ -182,12 +182,17 @@ export interface MonthStat {
   /** 按金额从大到小排的支出分类 */
   byCat: { category: string; amount: number; share: number }[]
   count: number
+  /** 有支出记录的天数（同一天记多笔只算一天） */
+  days: number
+  /** 日均支出 = 支出 / 有支出的天数，没记过就是 0 */
+  dailyAvg: number
 }
 
 export function monthStat(entries: Entry[], ym: string): MonthStat {
   let expense = 0
   let income = 0
   const cats = new Map<string, number>()
+  const spendDays = new Set<string>()
   let count = 0
   for (const e of entries) {
     if (monthOf(e.date) !== ym) continue
@@ -196,6 +201,7 @@ export function monthStat(entries: Entry[], ym: string): MonthStat {
       income += e.amount
     } else {
       expense += e.amount
+      spendDays.add(e.date)
       cats.set(e.category, (cats.get(e.category) ?? 0) + e.amount)
     }
   }
@@ -206,7 +212,16 @@ export function monthStat(entries: Entry[], ym: string): MonthStat {
       share: expense > 0 ? amount / expense : 0,
     }))
     .sort((a, b) => b.amount - a.amount)
-  return { expense, income, balance: income - expense, byCat, count }
+  const days = spendDays.size
+  return {
+    expense,
+    income,
+    balance: income - expense,
+    byCat,
+    count,
+    days,
+    dailyAvg: days > 0 ? expense / days : 0,
+  }
 }
 
 /** 金额显示：1,234.00 */

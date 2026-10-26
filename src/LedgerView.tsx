@@ -178,6 +178,20 @@ export function LedgerView({
             <span className="ld-sum-k">结余</span>
             <b className={stat.balance < 0 ? 'ld-expense' : ''}>¥{money(stat.balance)}</b>
           </div>
+          <div
+            className="ld-sum-cell"
+            title={
+              stat.days > 0
+                ? `¥${money(stat.expense)} ÷ ${stat.days} 天（只算有支出的日子）`
+                : '这个月还没支出'
+            }
+          >
+            <span className="ld-sum-k">
+              日均
+              {stat.days > 0 && <i className="ld-sum-hint">{stat.days} 天</i>}
+            </span>
+            <b>¥{money(stat.dailyAvg)}</b>
+          </div>
         </div>
       </div>
 

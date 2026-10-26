@@ -1772,7 +1772,8 @@ button {
 
 .ld-sum {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* 窗口拖窄时自动换行成 2 列 / 1 列，不让「结余」和「日均」挤爆 */
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   gap: 10px;
   margin-top: 12px;
 }
@@ -1784,11 +1785,20 @@ button {
   margin-bottom: 4px;
 }
 
+.ld-sum-hint {
+  font-style: normal;
+  margin-left: 5px;
+  font-size: 10.5px;
+  color: var(--sub);
+  opacity: 0.85;
+}
+
 .ld-sum b {
-  font-size: 21px;
+  font-size: 19px;
   font-weight: 600;
   letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .ld-expense {
