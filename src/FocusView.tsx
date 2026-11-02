@@ -39,12 +39,15 @@ export function FocusView({
   onChange,
   inheritHint,
   onInherit,
+  onRepeat,
 }: {
   note: Note
   onChange: (body: string) => void
   /** 更早的月份里还留着几件没做完；有值才显示「继承」按钮 */
   inheritHint?: { count: number; months: string[] } | null
   onInherit?: () => Promise<number>
+  /** 改了「每月循环」后告诉外面，好把后面几个月的笔记一起补上 */
+  onRepeat?: (item: FocusItem, on: boolean) => void
 }) {
   const sheet = useMemo(() => parseFocus(note.body), [note.body])
 
@@ -55,6 +58,8 @@ export function FocusView({
   /** 进度类事项开关 + 共几步 */
   const [byStep, setByStep] = useState(false)
   const [stepsText, setStepsText] = useState(String(DEFAULT_STEPS))
+  /** 新记的这件是不是每月循环 */
+  const [monthly, setMonthly] = useState(false)
   /** 只看：all | open | done | failed */
   const [filter, setFilter] = useState<Filter>('all')
   /** 收起来的月份（YYYY-MM）；默认全部展开 */
@@ -148,15 +153,30 @@ export function FocusView({
       note: memo.trim(),
       reason: '',
       movedTo: '',
+      repeat: monthly,
     }
     save([...sheet.items, item])
     // 没定日期的算在本月那组，别让它被收起来看不见
     setClosed((prev) => prev.filter((m) => m !== monthOf(todayISO())))
     setTitle('')
     setMemo('')
-    setFlash(steps > 0 ? `已记下 · 进度类 ${steps} 步` : '已记下')
+    const bits: string[] = []
+    if (steps > 0) bits.push(`进度类 ${steps} 步`)
+    if (monthly) bits.push('每月循环')
+    setFlash(bits.length > 0 ? `已记下 · ${bits.join(' · ')}` : '已记下')
     window.setTimeout(() => setFlash(''), 1400)
     titleRef.current?.focus()
+    // 已经建好的下个月笔记里也得有它
+    if (monthly) onRepeat?.(item, true)
+  }
+
+  /** 这一件是不是每月循环（点了之后把后面几个月的笔记也补上） */
+  const toggleRepeat = (i: number) => {
+    const it = sheet.items[i]
+    if (it.status === 'moved') return
+    const on = !it.repeat
+    patch(i, { repeat: on })
+    onRepeat?.({ ...it, repeat: on }, on)
   }
 
   /** 勾完成 / 取消完成 */
@@ -223,7 +243,7 @@ export function FocusView({
     setInheriting(true)
     try {
       const n = await onInherit()
-      setFlash(n > 0 ? `已继承 ${n} 件没做完的事` : '没有可继承的事项')
+      setFlash(n > 0 ? `已带过来 ${n} 件` : '没有可带的事项')
       window.setTimeout(() => setFlash(''), 2200)
       // 继承来的都没日期，归到本月那组，别让它藏在收起的组里
       setClosed((prev) => prev.filter((m) => m !== monthOf(todayISO())))
@@ -344,6 +364,14 @@ export function FocusView({
             <span className="fc-opt-box">{byStep ? '✓' : ''}</span>
             进度类事项
           </button>
+          <button
+            className={`fc-opt fc-opt-rep${monthly ? ' on' : ''}`}
+            onClick={() => setMonthly((v) => !v)}
+            title="每月循环：以后每个月都会自动出现一件（日期清空、进度归零）"
+          >
+            <span className="fc-opt-box">{monthly ? '✓' : ''}</span>
+            ↻ 每月循环
+          </button>
           {byStep && (
             <span className="fc-steps-pick">
               共
@@ -410,9 +438,9 @@ export function FocusView({
               className="fc-inherit"
               disabled={inheriting}
               onClick={() => void runInherit()}
-              title={`把 ${inheritHint.months.join('、')} 里没做完的搬过来；原来那几件会标成「已转入」`}
+              title={`把 ${inheritHint.months.join('、')} 里没做完的和每月循环的带过来；没做完的那几件原来会标成「已转入」`}
             >
-              {inheriting ? '继承中…' : `⇩ 继承 ${inheritHint.count} 件未完成`}
+              {inheriting ? '带过来中…' : `⇩ 带过来 ${inheritHint.count} 件`}
             </button>
           )}
           {months.length > 0 && (
@@ -509,6 +537,11 @@ export function FocusView({
                                   {it.title}
                                 </span>
                               )}
+                              {it.repeat && (
+                                <span className="fc-rep-tag" title="每月循环：每个月都会自动出现一件">
+                                  ↻ 每月
+                                </span>
+                              )}
                               {it.note && editFor !== i && (
                                 <span className="ld-item-note">{it.note}</span>
                               )}
@@ -552,6 +585,19 @@ export function FocusView({
                               </span>
                             )}
                             <span className="fc-acts">
+                              {!moved && (
+                                <button
+                                  className={`fc-rep${it.repeat ? ' on' : ''}`}
+                                  title={
+                                    it.repeat
+                                      ? '取消每月循环（以后月份不再自动带上）'
+                                      : '设为每月循环（每个月自动出现一件）'
+                                  }
+                                  onClick={() => toggleRepeat(i)}
+                                >
+                                  ↻
+                                </button>
+                              )}
                               {!done && !moved && (
                                 <button
                                   className="fc-rename"

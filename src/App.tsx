@@ -23,13 +23,16 @@ import { FocusView } from './FocusView'
 import { defaultLedgerTitle, ledgerSummary, parseLedger, serializeLedger } from './ledger'
 import {
   defaultFocusTitle,
+  describeInherit,
   earlierNotes,
   focusSummary,
+  freshCopy,
   noteMonth,
   parseFocus,
+  planInherit,
   serializeFocus,
-  takeOpenItems,
 } from './focus'
+import type { FocusItem } from './focus'
 import { RichEditor, type RichEditorHandle } from './RichEditor'
 import MANUAL_BODY from './manual.md?raw'
 
@@ -424,8 +427,9 @@ export default function App() {
   }, [])
 
   /**
-   * 把更早月份里「还没做完」的事搬到这篇重要事项笔记里。
-   * 原笔记那边标成「已转入 YYYY-MM」，所以搬过的不会被再搬一次。
+   * 把更早月份里「还没做完」的事，以及所有标了「每月循环」的事，带到这篇重要事项笔记里。
+   * 搬走的在原处标成「已转入 YYYY-MM」，所以不会被再搬一次；
+   * 每月循环的是复制一份新的（原处不动），所以每个月都会有。
    * 新建下个月的笔记时会自动调一次；老笔记也能点按钮手动补。
    */
   const inheritUnfinished = useCallback(
@@ -438,40 +442,114 @@ export default function App() {
       const sources = earlierNotes(refs, targetYm)
       if (sources.length === 0) return 0
 
-      let body = target.body
-      let count = 0
-      const months: string[] = []
-      for (const src of sources) {
-        const sheet = parseFocus(src.body)
-        const moved = takeOpenItems(sheet.items, targetYm)
-        if (moved.count === 0) continue
-        count += moved.count
-        months.push(noteMonth(src))
-        const cur = parseFocus(body)
-        body = serializeFocus({ items: [...cur.items, ...moved.taken], extra: cur.extra })
-        // 源笔记：搬走的那几件标记成「已转入」
-        const srcNote = notesRef.current.find((n) => n.file === src.file)
-        if (srcNote) {
-          const next: Note = {
-            ...srcNote,
-            body: serializeFocus({ items: moved.source, extra: sheet.extra }),
-            updatedAt: Date.now(),
-          }
-          setNotes((prev) => prev.map((n) => (n.file === src.file ? next : n)))
-          void persist(next)
+      const targetSheet = parseFocus(target.body)
+      const plan = planInherit(sources, targetYm, targetSheet.items)
+
+      // 源笔记：搬走的那几件标记成「已转入」
+      for (const s of plan.sources) {
+        const srcNote = notesRef.current.find((n) => n.file === s.file)
+        if (!srcNote) continue
+        const next: Note = {
+          ...srcNote,
+          body: serializeFocus({ items: s.items, extra: parseFocus(srcNote.body).extra }),
+          updatedAt: Date.now(),
         }
+        setNotes((prev) => prev.map((n) => (n.file === s.file ? next : n)))
+        void persist(next)
       }
-      if (count === 0) {
-        // 有更早的笔记但没得搬：说一声，免得以为功能没生效
-        flashNotice(`${months.length > 0 ? months.join('、') : '更早的笔记'}里没有待办可继承（失败和已完成的不搬）`)
+
+      if (plan.taken.length === 0) {
+        // 有更早的笔记但没得带：说一声，免得以为功能没生效
+        const from = plan.months.length > 0 ? plan.months.join('、') : '更早的笔记'
+        flashNotice(`${from}里没有待办可继承（失败和已完成的不搬）`)
         return 0
       }
 
-      const next: Note = { ...target, body, updatedAt: Date.now() }
+      const next: Note = {
+        ...target,
+        body: serializeFocus({
+          items: [...targetSheet.items, ...plan.taken],
+          extra: targetSheet.extra,
+        }),
+        updatedAt: Date.now(),
+      }
       setNotes((prev) => prev.map((n) => (n.file === target.file ? next : n)))
       await persist(next)
-      flashNotice(`已从 ${months.join('、')} 继承 ${count} 件没做完的事`)
-      return count
+      flashNotice(describeInherit(plan, sources.length > 0 ? noteMonth(sources[sources.length - 1]) : ''))
+      return plan.taken.length
+    },
+    [persist, flashNotice],
+  )
+
+  /**
+   * 打开 / 关掉某一件的「每月循环」。
+   * 打开：后面已经建好的月份笔记里也补上一份（没有同名才补）；
+   * 关掉：那些月份里的同名副本也一起取消循环，免得它们继续往后再长。历史记录都留着。
+   */
+  const syncRepeat = useCallback(
+    async (item: FocusItem, on: boolean) => {
+      const src = notesRef.current.find((n) => n.file === activeFileRef.current)
+      if (!src?.focus) return
+      const srcYm = noteMonth(src)
+      const title = item.title.trim()
+      if (!title) return
+
+      const later = notesRef.current
+        .filter((n) => n.focus && n.file !== src.file && noteMonth(n) > srcYm)
+        .sort((a, b) => (noteMonth(a) < noteMonth(b) ? -1 : 1))
+
+      if (later.length === 0) {
+        flashNotice(
+          on
+            ? `「${title}」已设为每月循环，以后每个月建笔记时都会自动带上一件`
+            : `「${title}」已取消每月循环`,
+        )
+        return
+      }
+
+      let added: string[] = []
+      let cancelled: string[] = []
+      for (const n of later) {
+        const sheet = parseFocus(n.body)
+        const hit = sheet.items.findIndex((it) => it.title.trim() === title)
+        let items = sheet.items
+        if (on) {
+          if (hit >= 0) {
+            // 那个月已经有这一件了：不是循环的就把标记补上，已经是循环的就不动
+            if (sheet.items[hit].repeat) continue
+            items = sheet.items.map((it, k) => (k === hit ? { ...it, repeat: true } : it))
+            added.push(noteMonth(n))
+          } else {
+            items = [...sheet.items, freshCopy({ ...item, repeat: true })]
+            added.push(noteMonth(n))
+          }
+        } else {
+          if (hit < 0 || !sheet.items[hit].repeat) continue
+          items = sheet.items.map((it, k) => (k === hit ? { ...it, repeat: false } : it))
+          cancelled.push(noteMonth(n))
+        }
+        const next: Note = {
+          ...n,
+          body: serializeFocus({ items, extra: sheet.extra }),
+          updatedAt: Date.now(),
+        }
+        setNotes((prev) => prev.map((x) => (x.file === n.file ? next : x)))
+        await persist(next)
+      }
+
+      if (on) {
+        flashNotice(
+          added.length > 0
+            ? `「${title}」已设为每月循环，并补进了 ${added.join('、')}`
+            : `「${title}」已设为每月循环，后面几个月的笔记里本来就有它`,
+        )
+      } else {
+        flashNotice(
+          cancelled.length > 0
+            ? `「${title}」已取消每月循环，${cancelled.join('、')} 里也不再循环（那几件还在）`
+            : `「${title}」已取消每月循环`,
+        )
+      }
     },
     [persist, flashNotice],
   )
@@ -897,16 +975,12 @@ export default function App() {
     const refs = notes
       .filter((n) => n.focus && n.file !== active.file)
       .map((n) => ({ file: n.file, title: n.title, createdAt: n.createdAt, body: n.body }))
-    const months: string[] = []
-    let count = 0
-    for (const src of earlierNotes(refs, ym)) {
-      const open = parseFocus(src.body).items.filter((it) => it.status === 'open').length
-      if (open > 0) {
-        count += open
-        months.push(noteMonth(src))
-      }
-    }
-    return count > 0 ? { count, months } : null
+    // 和真正「继承」时用同一套算法算，按钮上的数字才不会跟实际搬的不一致
+    const sources = earlierNotes(refs, ym)
+    const plan = planInherit(sources, ym, parseFocus(active.body).items)
+    if (plan.taken.length === 0) return null
+    const months = plan.months.length > 0 ? plan.months : [...new Set(sources.map(noteMonth))]
+    return { count: plan.taken.length, months }
   }, [notes, active])
 
   const scopeLabel = tagFilter
@@ -1319,6 +1393,7 @@ export default function App() {
                   onChange={(body) => patch({ body })}
                   inheritHint={inheritHint}
                   onInherit={() => inheritUnfinished(active)}
+                  onRepeat={(item, on) => void syncRepeat(item, on)}
                 />
               ) : (
                 <RichEditor

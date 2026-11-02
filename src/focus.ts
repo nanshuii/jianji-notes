@@ -3,10 +3,13 @@
  *
  * 和记账一样，数据就存在笔记正文里，一张普通 Markdown 表格：
  *
- *   | 日期 | 事项 | 级别 | 状态 | 进度 | 子事项 | 备注 | 失败原因 |
- *   | --- | --- | --- | --- | --- | --- | --- | --- |
- *   | 2026-10-25 | 交房租 | 重要 | 待办 | | | 房东账号没变 | |
- *   | 2026-10-30 | 装修 | 紧急 | 待办 | 3/10 | 买水泥 ✓；找师傅 | | |
+ *   | 日期 | 事项 | 级别 | 状态 | 进度 | 子事项 | 备注 | 失败原因 | 循环 |
+ *   | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+ *   | 2026-10-25 | 交房租 | 重要 | 待办 | | | 房东账号没变 | | 每月 |
+ *   | 2026-10-30 | 装修 | 紧急 | 待办 | 3/10 | 买水泥 ✓；找师傅 | | | |
+ *
+ * 最后一列写「每月」就是每月循环：每个月都会自动多出一件待办（复制一份新的，
+ * 日期清空、进度归零），原来那件不受影响。
  *
  * 打开时按月份分组展示（2026年10月 …），带倒计时、进度条、子事项、完成勾选。
  * 好处同样是：用任何编辑器都能看、能改，Git 能 diff。
@@ -40,6 +43,8 @@ export interface FocusItem {
   reason: string
   /** 已转入的目标月份（YYYY-MM）；只有 status='moved' 时有值 */
   movedTo: string
+  /** 每月循环：每个月都会自动多出一件 */
+  repeat: boolean
 }
 
 export interface FocusSheet {
@@ -83,6 +88,11 @@ export function isOpen(it: FocusItem): boolean {
   return it.status === 'open'
 }
 
+/** 每月循环的事项 */
+export function isRepeat(it: FocusItem): boolean {
+  return it.repeat === true
+}
+
 /** 进度类事项的「3/10」；非进度类返回空串 */
 export function progressLabel(it: FocusItem): string {
   return it.steps > 0 ? `${it.progress}/${it.steps}` : ''
@@ -103,7 +113,7 @@ export const DEFAULT_STEPS = 10
 export const MIN_STEPS = 2
 export const MAX_STEPS = 100
 
-const HEADER = ['日期', '事项', '级别', '状态', '进度', '子事项', '备注', '失败原因']
+const HEADER = ['日期', '事项', '级别', '状态', '进度', '子事项', '备注', '失败原因', '循环']
 
 function cells(line: string): string[] {
   const t = line.trim()
@@ -180,6 +190,14 @@ function parseMovedTo(raw: string): string {
   return m ? `${m[1]}-${String(m[2]).padStart(2, '0')}` : ''
 }
 
+/** 循环列：写「每月」「循环」「↻」「✓」都算；空着（或者写「否」「—」）就是不定时重复 */
+function parseRepeat(raw: string): boolean {
+  const s = raw.trim()
+  if (!s) return false
+  if (/^(否|无|不|no|false|0|—|-|×|✗)$/i.test(s)) return false
+  return /每月|月度|循环|repeat|monthly|✓|√|是|↻/i.test(s)
+}
+
 /** 「3/10」→ {steps:10, progress:3}；读不出就当成不是进度类 */
 function parseProgress(raw: string): { steps: number; progress: number } {
   const m = /(\d+)\s*[/／]\s*(\d+)/.exec(raw)
@@ -229,6 +247,7 @@ export function parseFocus(body: string): FocusSheet {
   const cSubs = idx('子事项')
   const cNote = idx('备注')
   const cReason = idx('失败原因')
+  const cRepeat = idx('循环')
 
   const at = (cs: string[], i: number) => (i >= 0 ? (cs[i] ?? '') : '')
 
@@ -250,6 +269,7 @@ export function parseFocus(body: string): FocusSheet {
       note: at(cs, cNote).trim(),
       reason: at(cs, cReason).trim(),
       movedTo: parseMovedTo(stateRaw),
+      repeat: parseRepeat(at(cs, cRepeat)),
     })
   }
 
@@ -282,6 +302,7 @@ export function serializeFocus(sheet: FocusSheet): string {
       serializeSubs(it.subs),
       cell(it.note),
       cell(it.reason),
+      it.repeat ? '每月' : '',
     ]
     return `| ${row.join(' | ')} |`
   })
@@ -461,11 +482,13 @@ export interface InheritResult {
  * 把「还没做完」的事项搬去 targetYm，原处留一条「已转入」的记录。
  * 失败和已完成的不动 —— 失败要重做，先在原处点「撤销」变回待办即可。
  * 搬过的不会再被搬第二次，所以反复点也不会重复。
+ * 每月循环的事不在这里搬：它是「复制一份新的一轮」，由 repeatCopies 处理，
+ * 原来那件留在原地当作记录。
  */
 export function takeOpenItems(items: FocusItem[], targetYm: string): InheritResult {
   const taken: FocusItem[] = []
   const source = items.map((it) => {
-    if (it.status !== 'open') return it
+    if (it.status !== 'open' || it.repeat) return it
     taken.push({
       ...it,
       date: '',
@@ -478,6 +501,98 @@ export function takeOpenItems(items: FocusItem[], targetYm: string): InheritResu
   })
   return { taken, source, count: taken.length }
 }
+
+/** 每月循环的新一份：日期清空、进度归零、子事项全部回到待完成，别的一股脑照搬 */
+export function freshCopy(it: FocusItem): FocusItem {
+  return {
+    ...it,
+    date: '',
+    status: 'open',
+    progress: 0,
+    subs: it.subs.map((s) => ({ ...s, done: false })),
+    reason: '',
+    movedTo: '',
+    repeat: true,
+  }
+}
+
+/** 从好几篇更早的笔记里，按标题挑出还标着「每月」的事项，月份近的说了算 */
+export function repeatPoolOf(sources: FocusNoteRef[]): FocusItem[] {
+  const pool = new Map<string, FocusItem>()
+  for (const src of sources) {
+    for (const it of parseFocus(src.body).items) {
+      if (!it.repeat) continue
+      // 已转入的那几行是历史记录，不再往后带
+      if (it.status === 'moved') continue
+      const k = it.title.trim()
+      if (!k) continue
+      pool.set(k, it) // 后面的（更近的月份）覆盖前面的
+    }
+  }
+  return [...pool.values()]
+}
+
+/**
+ * 新月份要带上什么：更早月份没做完的待办 + 所有每月循环的事项。
+ * 纯函数，不落盘，所以「提示框里显示几件」和「真搬几件」用的是同一套算法。
+ */
+export interface InheritPlan {
+  /** 要追加进目标笔记的（先搬的待办，后循环副本） */
+  taken: FocusItem[]
+  /** 源笔记改过的新表格（同月里搬走的才在里面） */
+  sources: { file: string; ym: string; items: FocusItem[] }[]
+  /** 搬过来的待办件数 */
+  moved: number
+  /** 每月循环新生成的件数 */
+  repeated: number
+  /** 有贡献的源月份（去重，按时间） */
+  months: string[]
+}
+
+export function planInherit(
+  sources: FocusNoteRef[],
+  targetYm: string,
+  targetItems: FocusItem[],
+): InheritPlan {
+  const taken: FocusItem[] = []
+  const changed: InheritPlan['sources'] = []
+  const months: string[] = []
+  let moved = 0
+
+  for (const src of sources) {
+    const sheet = parseFocus(src.body)
+    const r = takeOpenItems(sheet.items, targetYm)
+    if (r.count === 0) continue
+    taken.push(...r.taken)
+    moved += r.count
+    const ym = noteMonth(src)
+    if (!months.includes(ym)) months.push(ym)
+    changed.push({ file: src.file, ym, items: r.source })
+  }
+
+  // 目标笔记里已经有同名的（不管是手动加的还是以前带过来的），就不再重复加
+  const exists = new Set(
+    [...targetItems, ...taken].map((it) => it.title.trim()).filter(Boolean),
+  )
+  const repeated: FocusItem[] = []
+  for (const it of repeatPoolOf(sources)) {
+    if (exists.has(it.title.trim())) continue
+    exists.add(it.title.trim())
+    repeated.push(freshCopy(it))
+  }
+
+  return { taken: [...taken, ...repeated], sources: changed, moved, repeated: repeated.length, months }
+}
+
+/** 一句话说明这次带了什么，用来做底部提示 */
+export function describeInherit(plan: InheritPlan, fallbackMonth: string): string {
+  const from = plan.months.length > 0 ? plan.months.join('、') : fallbackMonth
+  const parts: string[] = []
+  if (plan.moved > 0) parts.push(`${plan.moved} 件没做完的`)
+  if (plan.repeated > 0) parts.push(`${plan.repeated} 件每月循环的`)
+  return `已从 ${from} 带上 ${parts.join('、')}`
+}
+
 
 /** 列表里显示的一句话摘要，代替正文摘要 */
 export function focusSummary(body: string): string {
