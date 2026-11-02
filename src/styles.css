@@ -1373,6 +1373,31 @@ button {
   cursor: pointer;
 }
 
+/* 继承之类的轻提示：底部一条，几秒自己消失 */
+.notice-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  background: #2c2823;
+  color: #f7f4ee;
+  font-size: 12.5px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  box-shadow: 0 6px 20px rgba(30, 26, 22, 0.18);
+  cursor: pointer;
+  z-index: 40;
+  white-space: nowrap;
+  animation: notice-in 0.18s ease-out;
+}
+
+@keyframes notice-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+}
+
 .modal-mask {
   position: fixed;
   inset: 0;
@@ -2298,6 +2323,37 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  flex-wrap: wrap;
+}
+
+.fc-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* 「继承未完成」：颜色压低一点，别抢了筛选项的注意力 */
+.fc-inherit {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--accent);
+  font-size: 11.5px;
+  line-height: 1;
+  padding: 5px 9px;
+  border-radius: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.fc-inherit:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.fc-inherit:disabled {
+  color: var(--sub);
+  cursor: default;
 }
 
 .fc-month {
@@ -2975,6 +3031,37 @@ button {
 .fc-item.failed {
   border-color: #ecd9d5;
   background: #fdfaf9;
+}
+
+/* 已经转到后面月份的：整行压暗，只留个记录 */
+.fc-item.moved {
+  border-style: dashed;
+  border-color: var(--line);
+  background: #fbfaf8;
+  opacity: 0.72;
+}
+
+.fc-item.moved .fc-item-title {
+  color: var(--sub);
+}
+
+.fc-item.moved .fc-check {
+  cursor: default;
+  border-color: #d8d2c8;
+  background: #fff;
+  color: var(--sub);
+  font-size: 10px;
+}
+
+.fc-moved-tag {
+  font-size: 11px;
+  color: var(--sub);
+  border: 1px dashed #d8d2c8;
+  border-radius: 6px;
+  padding: 2px 6px;
+  white-space: nowrap;
+  min-width: 62px;
+  text-align: center;
 }
 
 .fc-item.failed .fc-item-title {

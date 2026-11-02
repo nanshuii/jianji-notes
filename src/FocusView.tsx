@@ -37,9 +37,14 @@ function clampSteps(n: number): number {
 export function FocusView({
   note,
   onChange,
+  inheritHint,
+  onInherit,
 }: {
   note: Note
   onChange: (body: string) => void
+  /** 更早的月份里还留着几件没做完；有值才显示「继承」按钮 */
+  inheritHint?: { count: number; months: string[] } | null
+  onInherit?: () => Promise<number>
 }) {
   const sheet = useMemo(() => parseFocus(note.body), [note.body])
 
@@ -65,6 +70,7 @@ export function FocusView({
   /** 正在给哪一条改名（只有未完成的事才能改） */
   const [editFor, setEditFor] = useState<number | null>(null)
   const [editText, setEditText] = useState('')
+  const [inheriting, setInheriting] = useState(false)
   const titleRef = useRef<HTMLInputElement | null>(null)
   const subRef = useRef<HTMLInputElement | null>(null)
   const editRef = useRef<HTMLInputElement | null>(null)
@@ -85,8 +91,14 @@ export function FocusView({
   }, [editFor])
 
   const stat = useMemo(() => focusStat(sheet.items), [sheet.items])
+  // 没定日期的也归在本月那组里，所以算进「本月」
   const thisMonth = useMemo(
-    () => sheet.items.filter((it) => monthOf(it.date) === monthOf(todayISO())).length,
+    () =>
+      sheet.items.filter(
+        (it) =>
+          it.status !== 'moved' &&
+          (!hasDate(it) || monthOf(it.date) === monthOf(todayISO())),
+      ).length,
     [sheet.items],
   )
 
@@ -135,6 +147,7 @@ export function FocusView({
       subs: [],
       note: memo.trim(),
       reason: '',
+      movedTo: '',
     }
     save([...sheet.items, item])
     // 没定日期的算在本月那组，别让它被收起来看不见
@@ -149,6 +162,7 @@ export function FocusView({
   /** 勾完成 / 取消完成 */
   const toggleDone = (i: number) => {
     const it = sheet.items[i]
+    if (it.status === 'moved') return
     if (it.status === 'done') {
       patch(i, {
         status: 'open',
@@ -166,7 +180,7 @@ export function FocusView({
   /** 点第 n 格：进度走到 n；点当前这一格就等于退回一格 */
   const setStep = (i: number, n: number) => {
     const it = sheet.items[i]
-    if (it.steps <= 0) return
+    if (it.steps <= 0 || it.status === 'moved') return
     const raw = n === it.progress ? n - 1 : n
     const progress = Math.max(0, Math.min(it.steps, raw))
     const status =
@@ -178,8 +192,11 @@ export function FocusView({
     }
   }
 
-  /** 已经做完的事就不给改名了，免得改完了对不上账 */
-  const canRename = (i: number) => sheet.items[i]?.status !== 'done'
+  /** 已经做完、已经转走的事就不给改名了，免得改完了对不上账 */
+  const canRename = (i: number) => {
+    const st = sheet.items[i]?.status
+    return st === 'open' || st === 'failed'
+  }
 
   const startRename = (i: number) => {
     if (!canRename(i)) return
@@ -200,8 +217,22 @@ export function FocusView({
     setEditText('')
   }
 
-  const addSub = (i: number) => {
-    const name = subText.trim()
+  /** 把更早月份没做完的事搬过来（新建下月笔记时会自动做一次，这里是手动补） */
+  const runInherit = async () => {
+    if (!onInherit || inheriting) return
+    setInheriting(true)
+    try {
+      const n = await onInherit()
+      setFlash(n > 0 ? `已继承 ${n} 件没做完的事` : '没有可继承的事项')
+      window.setTimeout(() => setFlash(''), 2200)
+      // 继承来的都没日期，归到本月那组，别让它藏在收起的组里
+      setClosed((prev) => prev.filter((m) => m !== monthOf(todayISO())))
+    } finally {
+      setInheriting(false)
+    }
+  }
+
+  const addSub = (i: number) => {    const name = subText.trim()
     if (!name) {
       setSubFor(null)
       return
@@ -373,14 +404,26 @@ export function FocusView({
             </button>
           ))}
         </div>
-        {months.length > 0 && (
-          <button
-            className="fc-collapse"
-            onClick={() => setClosed(allClosed ? [] : months.map((m) => m.ym))}
-          >
-            {allClosed ? '全部展开' : '全部收起'}
-          </button>
-        )}
+        <div className="fc-bar-right">
+          {inheritHint && inheritHint.count > 0 && (
+            <button
+              className="fc-inherit"
+              disabled={inheriting}
+              onClick={() => void runInherit()}
+              title={`把 ${inheritHint.months.join('、')} 里没做完的搬过来；原来那几件会标成「已转入」`}
+            >
+              {inheriting ? '继承中…' : `⇩ 继承 ${inheritHint.count} 件未完成`}
+            </button>
+          )}
+          {months.length > 0 && (
+            <button
+              className="fc-collapse"
+              onClick={() => setClosed(allClosed ? [] : months.map((m) => m.ym))}
+            >
+              {allClosed ? '全部展开' : '全部收起'}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* ---------- 按月份分组 ---------- */}
@@ -392,6 +435,7 @@ export function FocusView({
         ) : (
           months.map((m) => {
             const open = !closed.includes(m.ym)
+            const movedN = m.items.filter((it) => it.status === 'moved').length
             return (
               <div key={m.ym} className={`fc-month${open ? '' : ' closed'}`}>
                 <button className="fc-month-head" onClick={() => toggleMonth(m.ym)}>
@@ -399,6 +443,7 @@ export function FocusView({
                   <span className="fc-month-name">{m.label}</span>
                   <span className="ld-muted">
                     {m.items.length} 项{m.open > 0 ? ` · 待办 ${m.open}` : ''}
+                    {movedN > 0 ? ` · 已转入 ${movedN}` : ''}
                   </span>
                 </button>
                 {open && (
@@ -409,6 +454,7 @@ export function FocusView({
                       const away = dated ? daysAway(it.date) : 0
                       const failed = it.status === 'failed'
                       const done = it.status === 'done'
+                      const moved = it.status === 'moved'
                       const overdue = it.status === 'open' && dated && away < 0
                       const isStep = it.steps > 0
                       const subDone = subDoneCount(it)
@@ -417,15 +463,22 @@ export function FocusView({
                           key={`${it.date}-${i}`}
                           className={`fc-item${done ? ' done' : ''}${overdue ? ' overdue' : ''}${
                             failed ? ' failed' : ''
-                          }${isStep ? ' has-steps' : ''}`}
+                          }${moved ? ' moved' : ''}${isStep ? ' has-steps' : ''}`}
                         >
                           <div className="fc-row">
                             <button
                               className="fc-check"
-                              title={done ? '标成待办' : '标成已完成'}
+                              disabled={moved}
+                              title={
+                                moved
+                                  ? `已转入 ${it.movedTo || '后面的月份'}`
+                                  : done
+                                    ? '标成待办'
+                                    : '标成已完成'
+                              }
                               onClick={() => toggleDone(i)}
                             >
-                              {done ? '✓' : ''}
+                              {done ? '✓' : moved ? '→' : ''}
                             </button>
                             <span className="fc-item-main">
                               {editFor === i ? (
@@ -477,25 +530,29 @@ export function FocusView({
                               {levelIcon(it.level)} {levelLabel(it.level)}
                             </span>
                             {/* 日期：默认没定，点「＋ 日期」定；定了还能改、能清掉 */}
-                            <DatePicker
-                              variant="inline"
-                              allowClear
-                              value={it.date}
-                              title={dated ? '改日期' : '给这件事定个日期'}
-                              onChange={(iso) => {
-                                patch(i, { date: iso })
-                                // 定到哪个月就展开哪个月；清掉日期则回到本月
-                                const target = iso ? monthOf(iso) : monthOf(todayISO())
-                                setClosed((prev) => prev.filter((m) => m !== target))
-                              }}
-                            />
-                            {dated && (
+                            {moved ? (
+                              <span className="fc-moved-tag">已转入 {it.movedTo || '后面月份'}</span>
+                            ) : (
+                              <DatePicker
+                                variant="inline"
+                                allowClear
+                                value={it.date}
+                                title={dated ? '改日期' : '给这件事定个日期'}
+                                onChange={(iso) => {
+                                  patch(i, { date: iso })
+                                  // 定到哪个月就展开哪个月；清掉日期则回到本月
+                                  const target = iso ? monthOf(iso) : monthOf(todayISO())
+                                  setClosed((prev) => prev.filter((m) => m !== target))
+                                }}
+                              />
+                            )}
+                            {dated && !moved && (
                               <span className={`fc-away${overdue ? ' late' : ''}`}>
                                 {done ? '已完成' : failed ? '已失败' : dayHint(it.date)}
                               </span>
                             )}
                             <span className="fc-acts">
-                              {!done && (
+                              {!done && !moved && (
                                 <button
                                   className="fc-rename"
                                   title="改名字"
@@ -504,28 +561,29 @@ export function FocusView({
                                   ✎
                                 </button>
                               )}
-                              {failed ? (
-                                <button
-                                  className="fc-undo"
-                                  title="撤销失败，回到待办"
-                                  onClick={() => patch(i, { status: 'open', reason: '' })}
-                                >
-                                  撤销
-                                </button>
-                              ) : (
-                                !done && (
+                              {!moved &&
+                                (failed ? (
                                   <button
-                                    className="fc-fail"
-                                    title="标成失败并写原因"
-                                    onClick={() => {
-                                      setFailFor(i)
-                                      setFailText('')
-                                    }}
+                                    className="fc-undo"
+                                    title="撤销失败，回到待办"
+                                    onClick={() => patch(i, { status: 'open', reason: '' })}
                                   >
-                                    失败
+                                    撤销
                                   </button>
-                                )
-                              )}
+                                ) : (
+                                  !done && (
+                                    <button
+                                      className="fc-fail"
+                                      title="标成失败并写原因"
+                                      onClick={() => {
+                                        setFailFor(i)
+                                        setFailText('')
+                                      }}
+                                    >
+                                      失败
+                                    </button>
+                                  )
+                                ))}
                               <button
                                 className="ld-item-del"
                                 title="删掉这件"
@@ -546,6 +604,7 @@ export function FocusView({
                                     k === it.progress - 1 ? ' last' : ''
                                   }`}
                                   data-step={k + 1}
+                                  disabled={moved}
                                   title={`第 ${k + 1} 步（点一下走到这里）`}
                                   onClick={() => setStep(i, k + 1)}
                                 />
@@ -567,23 +626,26 @@ export function FocusView({
                                 <div key={`${s.title}-${si}`} className={`fc-sub${s.done ? ' done' : ''}`}>
                                   <button
                                     className="fc-sub-check"
+                                    disabled={moved}
                                     title={s.done ? '标成待完成' : '标成已完成'}
                                     onClick={() => toggleSub(i, si)}
                                   >
                                     {s.done ? '✓' : ''}
                                   </button>
                                   <span className="fc-sub-title">{s.title}</span>
-                                  <button
-                                    className="fc-sub-del"
-                                    title="删掉这个子事项"
-                                    onClick={() => removeSub(i, si)}
-                                  >
-                                    ×
-                                  </button>
+                                  {!moved && (
+                                    <button
+                                      className="fc-sub-del"
+                                      title="删掉这个子事项"
+                                      onClick={() => removeSub(i, si)}
+                                    >
+                                      ×
+                                    </button>
+                                  )}
                                 </div>
                               ))}
 
-                              {subFor === i ? (
+                              {moved ? null : subFor === i ? (
                                 <input
                                   ref={subRef}
                                   className="fc-sub-input"

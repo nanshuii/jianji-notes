@@ -14,7 +14,8 @@
  */
 
 export type FocusLevel = 'normal' | 'important' | 'urgent'
-export type FocusStatus = 'open' | 'done' | 'failed'
+/** moved = 没做完，已经转到后面某个月的笔记里 */
+export type FocusStatus = 'open' | 'done' | 'failed' | 'moved'
 
 /** 子事项：只有「待完成 / 已完成」两种状态 */
 export interface SubTask {
@@ -37,6 +38,8 @@ export interface FocusItem {
   note: string
   /** 失败原因 */
   reason: string
+  /** 已转入的目标月份（YYYY-MM）；只有 status='moved' 时有值 */
+  movedTo: string
 }
 
 export interface FocusSheet {
@@ -62,7 +65,10 @@ export function levelIcon(level: FocusLevel): string {
 }
 
 export function statusLabel(status: FocusStatus): string {
-  return status === 'done' ? '已完成' : status === 'failed' ? '已失败' : '待办'
+  if (status === 'done') return '已完成'
+  if (status === 'failed') return '已失败'
+  if (status === 'moved') return '已转入'
+  return '待办'
 }
 
 export function isDone(it: FocusItem): boolean {
@@ -161,9 +167,17 @@ function parseLevel(raw: string): FocusLevel {
 
 function parseStatus(raw: string): FocusStatus {
   const s = raw.trim()
+  // 「已转入 2026-11」排在前面判断：它不带完成/失败字样
+  if (/转入|迁移|moved/i.test(s)) return 'moved'
   if (/失败|fail|✗|×/i.test(s)) return 'failed'
   if (/完成|done|√|✓/i.test(s)) return 'done'
   return 'open'
+}
+
+/** 从「已转入 2026-11」里取目标月份；取不到就空着 */
+function parseMovedTo(raw: string): string {
+  const m = /(\d{4})\s*[-年/.]\s*(\d{1,2})/.exec(raw)
+  return m ? `${m[1]}-${String(m[2]).padStart(2, '0')}` : ''
 }
 
 /** 「3/10」→ {steps:10, progress:3}；读不出就当成不是进度类 */
@@ -224,16 +238,18 @@ export function parseFocus(body: string): FocusSheet {
     const title = at(cs, cTitle).trim()
     if (!title) continue
     const { steps, progress } = parseProgress(at(cs, cSteps))
+    const stateRaw = at(cs, cState)
     items.push({
       date: parseDate(at(cs, cDate)),
       title,
       level: parseLevel(at(cs, cLevel)),
-      status: parseStatus(at(cs, cState)),
+      status: parseStatus(stateRaw),
       steps,
       progress,
       subs: parseSubs(at(cs, cSubs)),
       note: at(cs, cNote).trim(),
       reason: at(cs, cReason).trim(),
+      movedTo: parseMovedTo(stateRaw),
     })
   }
 
@@ -253,11 +269,15 @@ function serializeSubs(subs: SubTask[]): string {
 export function serializeFocus(sheet: FocusSheet): string {
   // 按「记下来的先后」原样写，不重排：没定日期的那几件才能保持添加顺序
   const rows = sheet.items.map((it) => {
+    const state =
+      it.status === 'moved'
+        ? `已转入 ${it.movedTo}`.trim()
+        : statusLabel(it.status)
     const row = [
       it.date,
       cell(it.title),
       levelLabel(it.level),
-      statusLabel(it.status),
+      state,
       it.steps > 0 ? `${it.progress}/${it.steps}` : '',
       serializeSubs(it.subs),
       cell(it.note),
@@ -288,9 +308,12 @@ export interface FocusMonth {
   open: number
 }
 
-/** 排序优先级：未完成最优先 → 失败第二 → 已完成第三 */
+/** 排序优先级：未完成最优先 → 失败第二 → 已完成第三 → 已转入最后 */
 function statusRank(it: FocusItem): number {
-  return it.status === 'open' ? 0 : it.status === 'failed' ? 1 : 2
+  if (it.status === 'open') return 0
+  if (it.status === 'failed') return 1
+  if (it.status === 'done') return 2
+  return 3
 }
 
 /**
@@ -334,6 +357,8 @@ export interface FocusStat {
   overdue: number
   /** 7 天内要做的 */
   soon: number
+  /** 已经转到后面月份去的（不算待办、也不算完成） */
+  moved: number
 }
 
 export function todayStart(): number {
@@ -359,9 +384,14 @@ export function dayHint(iso: string): string {
 export function focusStat(items: FocusItem[]): FocusStat {
   let done = 0
   let failed = 0
+  let moved = 0
   let overdue = 0
   let soon = 0
   for (const it of items) {
+    if (it.status === 'moved') {
+      moved += 1
+      continue
+    }
     if (it.status === 'done') {
       done += 1
       continue
@@ -376,13 +406,15 @@ export function focusStat(items: FocusItem[]): FocusStat {
     if (n < 0) overdue += 1
     else if (n <= 7) soon += 1
   }
+  const total = items.length - moved
   return {
-    total: items.length,
+    total,
     done,
     failed,
-    open: items.length - done - failed,
+    open: total - done - failed,
     overdue,
     soon,
+    moved,
   }
 }
 
@@ -390,6 +422,61 @@ export function focusStat(items: FocusItem[]): FocusStat {
 export function defaultFocusTitle(ts: number = Date.now()): string {
   const d = new Date(ts)
   return `重要事项 ${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+/* ---------------- 跨月继承 ---------------- */
+
+/** 笔记属于哪个月：先看标题里的「2026-10」，改过标题就想办法从创建时间取 */
+export function noteMonth(ref: { title: string; createdAt: number }): string {
+  const m = /(\d{4})\s*[-年/.]\s*(\d{1,2})/.exec(ref.title)
+  if (m) return `${m[1]}-${String(m[2]).padStart(2, '0')}`
+  return monthOf(todayISO(new Date(ref.createdAt)))
+}
+
+export interface FocusNoteRef {
+  file: string
+  title: string
+  createdAt: number
+  body: string
+}
+
+/** 比目标月份更早的那些笔记，月份从早到晚（同月按创建时间） */
+export function earlierNotes(refs: FocusNoteRef[], targetYm: string): FocusNoteRef[] {
+  return refs
+    .map((r) => ({ r, ym: noteMonth(r) }))
+    .filter((x) => x.ym < targetYm)
+    .sort((a, b) => (a.ym === b.ym ? a.r.createdAt - b.r.createdAt : a.ym < b.ym ? -1 : 1))
+    .map((x) => x.r)
+}
+
+export interface InheritResult {
+  /** 搬到新月份的那些：日期清空（重新安排），进度和子事项原样带过来 */
+  taken: FocusItem[]
+  /** 源笔记的新表格：被搬走的标成「已转入 YYYY-MM」 */
+  source: FocusItem[]
+  count: number
+}
+
+/**
+ * 把「还没做完」的事项搬去 targetYm，原处留一条「已转入」的记录。
+ * 失败和已完成的不动 —— 失败要重做，先在原处点「撤销」变回待办即可。
+ * 搬过的不会再被搬第二次，所以反复点也不会重复。
+ */
+export function takeOpenItems(items: FocusItem[], targetYm: string): InheritResult {
+  const taken: FocusItem[] = []
+  const source = items.map((it) => {
+    if (it.status !== 'open') return it
+    taken.push({
+      ...it,
+      date: '',
+      status: 'open',
+      reason: '',
+      movedTo: '',
+      subs: it.subs.map((s) => ({ ...s })),
+    })
+    return { ...it, status: 'moved' as FocusStatus, movedTo: targetYm }
+  })
+  return { taken, source, count: taken.length }
 }
 
 /** 列表里显示的一句话摘要，代替正文摘要 */

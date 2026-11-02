@@ -21,7 +21,15 @@ import {
 import { LedgerView } from './LedgerView'
 import { FocusView } from './FocusView'
 import { defaultLedgerTitle, ledgerSummary, parseLedger, serializeLedger } from './ledger'
-import { defaultFocusTitle, focusSummary, parseFocus, serializeFocus } from './focus'
+import {
+  defaultFocusTitle,
+  earlierNotes,
+  focusSummary,
+  noteMonth,
+  parseFocus,
+  serializeFocus,
+  takeOpenItems,
+} from './focus'
 import { RichEditor, type RichEditorHandle } from './RichEditor'
 import MANUAL_BODY from './manual.md?raw'
 
@@ -163,6 +171,8 @@ export default function App() {
   const [ready, setReady] = useState(false)
   const [location, setLocation] = useState('')
   const [error, setError] = useState('')
+  /** 一闪而过的提示（比如「已继承 3 件」），几秒后自己消失 */
+  const [notice, setNotice] = useState('')
   const [savedAt, setSavedAt] = useState(0)
   const [railOpen, setRailOpen] = useState(true)
 
@@ -191,6 +201,7 @@ export default function App() {
 
   const notesRef = useRef<Note[]>([])
   const lastSaved = useRef<Map<string, string>>(new Map())
+  const noticeTimer = useRef<number | null>(null)
   const timer = useRef<number | null>(null)
   const searchRef = useRef<HTMLInputElement | null>(null)
   const richRef = useRef<RichEditorHandle | null>(null)
@@ -405,8 +416,67 @@ export default function App() {
     [persist],
   )
 
-  const statsOf = useCallback((body: string): NoteStat => {
-    const cache = statCache.current
+  /** 底部轻提示，几秒后自己消失 */
+  const flashNotice = useCallback((msg: string) => {
+    setNotice(msg)
+    if (noticeTimer.current) window.clearTimeout(noticeTimer.current)
+    noticeTimer.current = window.setTimeout(() => setNotice(''), 4200)
+  }, [])
+
+  /**
+   * 把更早月份里「还没做完」的事搬到这篇重要事项笔记里。
+   * 原笔记那边标成「已转入 YYYY-MM」，所以搬过的不会被再搬一次。
+   * 新建下个月的笔记时会自动调一次；老笔记也能点按钮手动补。
+   */
+  const inheritUnfinished = useCallback(
+    async (target: Note): Promise<number> => {
+      if (!target.focus) return 0
+      const targetYm = noteMonth(target)
+      const refs = notesRef.current
+        .filter((n) => n.focus && n.file !== target.file)
+        .map((n) => ({ file: n.file, title: n.title, createdAt: n.createdAt, body: n.body }))
+      const sources = earlierNotes(refs, targetYm)
+      if (sources.length === 0) return 0
+
+      let body = target.body
+      let count = 0
+      const months: string[] = []
+      for (const src of sources) {
+        const sheet = parseFocus(src.body)
+        const moved = takeOpenItems(sheet.items, targetYm)
+        if (moved.count === 0) continue
+        count += moved.count
+        months.push(noteMonth(src))
+        const cur = parseFocus(body)
+        body = serializeFocus({ items: [...cur.items, ...moved.taken], extra: cur.extra })
+        // 源笔记：搬走的那几件标记成「已转入」
+        const srcNote = notesRef.current.find((n) => n.file === src.file)
+        if (srcNote) {
+          const next: Note = {
+            ...srcNote,
+            body: serializeFocus({ items: moved.source, extra: sheet.extra }),
+            updatedAt: Date.now(),
+          }
+          setNotes((prev) => prev.map((n) => (n.file === src.file ? next : n)))
+          void persist(next)
+        }
+      }
+      if (count === 0) {
+        // 有更早的笔记但没得搬：说一声，免得以为功能没生效
+        flashNotice(`${months.length > 0 ? months.join('、') : '更早的笔记'}里没有待办可继承（失败和已完成的不搬）`)
+        return 0
+      }
+
+      const next: Note = { ...target, body, updatedAt: Date.now() }
+      setNotes((prev) => prev.map((n) => (n.file === target.file ? next : n)))
+      await persist(next)
+      flashNotice(`已从 ${months.join('、')} 继承 ${count} 件没做完的事`)
+      return count
+    },
+    [persist, flashNotice],
+  )
+
+  const statsOf = useCallback((body: string): NoteStat => {    const cache = statCache.current
     const hit = cache.get(body)
     if (hit) return hit
     const p = listProgress(body)
@@ -500,8 +570,10 @@ export default function App() {
       else if (scope === null) setScope('')
       setQuery('')
       if (!isLedger && !isFocus) window.setTimeout(() => richRef.current?.focus(), 60)
+      // 新建下个月的重要事项：把之前没做完的自动带过来
+      if (isFocus) await inheritUnfinished(note)
     },
-    [storage, scope, openNote, notebooks],
+    [storage, scope, openNote, notebooks, inheritUnfinished],
   )
 
   const removeNote = useCallback(
@@ -817,6 +889,25 @@ export default function App() {
   const active = notes.find((n) => n.file === activeFile) ?? null
   // 任何一篇正文里有 `- [ ]` 就算有待办，不再是「清单」这种类型专属
   const activeStat = active ? statsOf(active.body) : null
+
+  // 更早月份里还留着几件没做完 —— 有的话当前这篇就显示「继承」按钮
+  const inheritHint = useMemo(() => {
+    if (!active?.focus) return null
+    const ym = noteMonth(active)
+    const refs = notes
+      .filter((n) => n.focus && n.file !== active.file)
+      .map((n) => ({ file: n.file, title: n.title, createdAt: n.createdAt, body: n.body }))
+    const months: string[] = []
+    let count = 0
+    for (const src of earlierNotes(refs, ym)) {
+      const open = parseFocus(src.body).items.filter((it) => it.status === 'open').length
+      if (open > 0) {
+        count += open
+        months.push(noteMonth(src))
+      }
+    }
+    return count > 0 ? { count, months } : null
+  }, [notes, active])
 
   const scopeLabel = tagFilter
     ? `标记：${tagFilter}`
@@ -1226,6 +1317,8 @@ export default function App() {
                   key={active.file}
                   note={active}
                   onChange={(body) => patch({ body })}
+                  inheritHint={inheritHint}
+                  onInherit={() => inheritUnfinished(active)}
                 />
               ) : (
                 <RichEditor
@@ -1237,6 +1330,12 @@ export default function App() {
               )}
             </section>
           </>
+        )}
+
+        {notice && (
+          <div className="notice-bar" onClick={() => setNotice('')}>
+            {notice}
+          </div>
         )}
 
         {error && (
