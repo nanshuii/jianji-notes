@@ -46,6 +46,8 @@ function usableFiles(list: FileList | File[] | null | undefined): File[] {
   return Array.from(list ?? []).filter((f) => f.type.startsWith('image/') || isHtmlFile(f))
 }
 
+const ONLY_TIP = '只认图片和 .html 网页文件，其它类型没插进来'
+
 export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
   { initial, onChange, onNotice, onReady },
   ref,
@@ -64,6 +66,8 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
   noticeRef.current = onNotice
   /** 上一次 HTML5 拖放的时间：Tauri 的原生拖放和它可能同时到，用它去重 */
   const lastDropAt = useRef(0)
+  /** 始终指向当前活着的编辑器：拖放的异步过程里编辑器可能被换掉，别再往旧的里插 */
+  const editorRef = useRef<Editor | null>(null)
   // 正在裁剪的图片（同时记住它在文档里的位置，裁剪结果按位置写回）
   const [crop, setCrop] = useState<{ src: string; pos: number } | null>(null)
 
@@ -90,15 +94,23 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
     editorProps: {
       attributes: { class: 'rich-body', spellcheck: 'false' },
       handlePaste(_view, event) {
-        const files = usableFiles(event.clipboardData?.files)
-        if (files.length === 0) return false
+        const all = event.clipboardData?.files
+        const files = usableFiles(all)
+        if (files.length === 0) {
+          if (all?.length) noticeRef.current?.(ONLY_TIP)
+          return false
+        }
         event.preventDefault()
         void insertRef.current(files)
         return true
       },
       handleDrop(view, event) {
-        const dropped = usableFiles((event as DragEvent).dataTransfer?.files)
-        if (dropped.length === 0) return false
+        const dt = (event as DragEvent).dataTransfer
+        const dropped = usableFiles(dt?.files)
+        if (dropped.length === 0) {
+          if (dt?.files?.length) noticeRef.current?.(ONLY_TIP)
+          return false
+        }
         event.preventDefault()
         lastDropAt.current = Date.now()
         // 按鼠标落点插，而不是插到上一次光标处
@@ -129,22 +141,29 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
 
   const insertFiles = useCallback(
     async (files: FileList | File[] | null | undefined, at?: number) => {
-      if (!editor || busy.current) return
+      // 读文件是异步的，读完可能已经换了编辑器实例，所以最后一步再取一次
+      const live = () => editorRef.current ?? editor
+      if (!live() || busy.current) return
       const list = usableFiles(files)
-      if (list.length === 0) return
+      if (list.length === 0) {
+        if (Array.from(files ?? []).length > 0) noticeRef.current?.(ONLY_TIP)
+        return
+      }
       busy.current = true
       try {
         for (const file of list) {
+          const ed = live()
+          if (!ed || ed.isDestroyed) return
           if (isHtmlFile(file) && !file.type.startsWith('image/')) {
             const html = await file.text()
             if (!html.trim()) {
               noticeRef.current?.(`「${file.name}」是空的，没插进来`)
               continue
             }
-            await insertHtmlEmbed(editor, html, file.name, at)
+            await insertHtmlEmbed(ed, html, file.name, at)
           } else {
             const src = await fileToDataUrl(file)
-            editor.chain().focus().setImage({ src, alt: '' }).run()
+            ed.chain().focus().setImage({ src, alt: '' }).run()
           }
         }
       } catch (e) {
@@ -195,6 +214,7 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
 
   // 诊断用：把编辑器实例挂出来，自动化测试和排障时能直接读选区状态
   useEffect(() => {
+    editorRef.current = editor ?? null
     if (editor) {
       ;(window as unknown as Record<string, unknown>).__ed = editor
     }
@@ -226,9 +246,15 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
               const name = path.split(/[\\/]/).pop() || '网页'
               try {
                 const html = await getStorage().readDroppedFile(path)
-                await insertHtmlEmbed(editor, html, name, at)
+                // 读文件的这几毫秒里笔记可能被切走、编辑器被换掉，那就不往旧的里插
+                const live = editorRef.current
+                if (!live || live.isDestroyed) {
+                  noticeRef.current?.('正在切换笔记，这张网页先不插了')
+                  continue
+                }
+                await insertHtmlEmbed(live, html, name, at)
               } catch (e) {
-                noticeRef.current?.(`没法读「${name}」：${String((e as Error)?.message ?? e)}`)
+                noticeRef.current?.(`没法插「${name}」：${String((e as Error)?.message ?? e)}`)
               }
             }
           })()

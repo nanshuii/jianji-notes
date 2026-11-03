@@ -28,6 +28,20 @@ import {
  */
 const SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals'
 
+/**
+ * 找卡片外面的滚动容器：鼠标在网页里滚到底还想接着往下滚时，把滚动接力给它。
+ * 从卡片往上找第一个「真的能滚」的元素，找不到就用整页。
+ */
+function outerScroller(from: HTMLElement | null): HTMLElement | null {
+  let n = from?.parentElement ?? null
+  while (n) {
+    const style = getComputedStyle(n)
+    if (/(auto|scroll)/.test(style.overflowY) && n.scrollHeight > n.clientHeight + 1) return n
+    n = n.parentElement
+  }
+  return (document.scrollingElement as HTMLElement | null) ?? null
+}
+
 export const HtmlEmbed = Node.create({
   name: 'htmlEmbed',
   group: 'block',
@@ -64,7 +78,22 @@ export const HtmlEmbed = Node.create({
   },
 })
 
-/** 把一段 HTML 存成附件并插进正文；at 是落点（拖拽时按鼠标位置插） */
+/** 正文里现在有几张网页卡片 */
+function embedCount(editor: Editor): number {
+  let n = 0
+  editor.state.doc.descendants((child) => {
+    if (child.type.name === 'htmlEmbed') n++
+  })
+  return n
+}
+
+/**
+ * 把一段 HTML 存成附件并插进正文；at 是落点（拖拽时按鼠标位置插）。
+ *
+ * 这里不靠 focus 决定落点 —— 桌面端拖文件时窗口本身没聚焦，focus 那条路会
+ * 悄悄失败，结果文件写进 .assets 了、正文里却什么都没有。改成直接算位置 +
+ * insertContentAt，插完再验一次，没落地就退到「追加到末尾」并报错。
+ */
 export async function insertHtmlEmbed(
   editor: Editor,
   html: string,
@@ -73,30 +102,43 @@ export async function insertHtmlEmbed(
 ): Promise<{ file: string; title: string; height: number }> {
   const file = await getStorage().saveAsset(makeAssetName(), html)
   const attrs = { file, title: titleOf(fileName), height: DEFAULT_HEIGHT }
-  const nodes = [{ type: 'htmlEmbed', attrs }, { type: 'paragraph' }]
-  const sel = editor.state.selection
-
-  // 选中的是另一张卡片时，往它后面插；否则 insertContent 会把那张替换掉
-  if (sel instanceof NodeSelection) {
-    editor.chain().insertContentAt(sel.to, nodes).scrollIntoView().run()
-    return attrs
-  }
-
-  // 落点：拖拽按鼠标位置；否则按光标；编辑器还没被点过就追加到末尾
-  const max = editor.state.doc.content.size
-  if (typeof at === 'number' && Number.isFinite(at)) {
-    try {
-      editor.commands.focus(Math.max(0, Math.min(at, max)))
-    } catch {
-      editor.commands.focus('end')
-    }
-  } else if (!editor.isFocused) {
-    editor.commands.focus('end')
-  } else {
-    editor.commands.focus()
-  }
   // 后面补一个空段落：不然卡片落在正文末尾时，光标没地方落脚没法接着写
-  editor.chain().insertContent(nodes).scrollIntoView().run()
+  const nodes = [{ type: 'htmlEmbed', attrs }, { type: 'paragraph' }]
+  const before = embedCount(editor)
+  const doc = editor.state.doc
+  const sel = editor.state.selection
+  const end = doc.content.size
+
+  // 落点：拖拽按鼠标位置；选中别的卡片时插到它后面（免得把它替换掉）；否则按光标
+  let pos = typeof at === 'number' && Number.isFinite(at) ? at : sel.to
+  if (sel instanceof NodeSelection && typeof at !== 'number') pos = sel.to
+  pos = Math.max(0, Math.min(Math.round(pos), end))
+
+  const put = (p: number) => editor.chain().insertContentAt(p, nodes).scrollIntoView().run()
+
+  try {
+    if (editor.isDestroyed) throw new Error('编辑器已经关了（笔记可能刚被切走），这张卡片没能插进来')
+    if (!put(pos) || embedCount(editor) === before) {
+      // 位置上插不进去（落点在叶子节点里之类），退一步：追加到正文末尾
+      put(end)
+    }
+    if (embedCount(editor) === before) throw new Error('卡片没插进正文（编辑器拒绝了这次插入）')
+  } catch (e) {
+    // 插不进去就别把孤儿文件留在 .assets 里
+    try {
+      await getStorage().removeAsset(file)
+    } catch {
+      /* 删不掉也无所谓 */
+    }
+    throw e instanceof Error ? e : new Error(String(e))
+  }
+
+  // 光标已经跟着插入内容落到卡片后面，这里只是把焦点给回编辑器，接着就能打字
+  try {
+    if (!editor.isFocused) editor.commands.focus()
+  } catch {
+    /* 窗口没聚焦时失败无所谓，不影响卡片已经在正文里 */
+  }
   return attrs
 }
 
@@ -114,9 +156,20 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
   const [liveH, setLiveH] = useState(height)
   const [full, setFull] = useState(false)
   const [resizing, setResizing] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  const [draft, setDraft] = useState('')
   const cardRef = useRef<HTMLDivElement | null>(null)
+  const nameRef = useRef<HTMLInputElement | null>(null)
+  const wheelOff = useRef<(() => void) | null>(null)
 
   useEffect(() => setLiveH(height), [height])
+
+  // 进改名状态时把原名整段选上，直接打字就替换
+  useEffect(() => {
+    if (renaming) nameRef.current?.select()
+  }, [renaming])
+
+  useEffect(() => () => wheelOff.current?.(), [])
 
   useEffect(() => {
     let alive = true
@@ -178,13 +231,47 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
     window.addEventListener('mouseup', up)
   }
 
+  /** 双击标题改名：回车/点别处保存，Esc 放弃，空名字当没改 */
+  const startRename = () => {
+    setDraft(title)
+    setRenaming(true)
+  }
+  const commitRename = () => {
+    const next = draft.trim()
+    setRenaming(false)
+    if (next && next !== title) updateAttributes({ title: next })
+  }
+
+  /** 网页里滚到头了，剩下的滚动量接着滚笔记正文（不然鼠标停在卡片上就滚不动页面） */
+  const attachWheel = (frame: HTMLIFrameElement) => {
+    wheelOff.current?.()
+    wheelOff.current = null
+    const doc = frame.contentDocument
+    if (!doc) return
+    const onWheel = (ev: WheelEvent) => {
+      const root = (doc.scrollingElement ?? doc.documentElement) as HTMLElement | null
+      if (!root) return
+      const atTop = root.scrollTop <= 0
+      const atBottom = Math.ceil(root.scrollTop + root.clientHeight) >= root.scrollHeight - 1
+      if (!((ev.deltaY > 0 && atBottom) || (ev.deltaY < 0 && atTop))) return
+      const outer = outerScroller(cardRef.current)
+      if (!outer) return
+      ev.preventDefault()
+      outer.scrollTop += ev.deltaY
+    }
+    doc.addEventListener('wheel', onWheel, { passive: false })
+    wheelOff.current = () => doc.removeEventListener('wheel', onWheel)
+  }
+
   /** 短的网页别留一大片空白：第一次载入时按内容把高度收一收（只收不放） */
   const fitRef = useRef('')
   const onFrameLoad = (e: React.SyntheticEvent<HTMLIFrameElement>) => {
+    const frameEl = e.currentTarget
+    attachWheel(frameEl)
     if (fitRef.current === file) return
     // 只收「还没动过」的默认高度，用户自己拖过的高度一律尊重
     if (Math.abs(liveH - DEFAULT_HEIGHT) > 2) return
-    const doc = e.currentTarget.contentDocument
+    const doc = frameEl.contentDocument
     if (!doc) return
     fitRef.current = file
     // 量 body 的高度：html 的 scrollHeight 至少等于视口，量出来永远「刚好装满」
@@ -226,7 +313,39 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
     >
       <div className="html-card-head" data-drag-handle title="按住拖动可挪位置">
         <span className="html-card-icon">{'</>'}</span>
-        <span className="html-card-title">{title}</span>
+        {renaming ? (
+          <input
+            ref={nameRef}
+            className="html-card-name"
+            value={draft}
+            spellCheck={false}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              e.stopPropagation()
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                commitRename()
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                setRenaming(false)
+              }
+            }}
+          />
+        ) : (
+          <span
+            className="html-card-title"
+            title="双击改名字"
+            onDoubleClick={(e) => {
+              e.stopPropagation()
+              startRename()
+            }}
+          >
+            {title}
+          </span>
+        )}
         {html !== null && <span className="html-card-size">{humanSize(html.length)}</span>}
         <span className="html-card-acts">
           <button
