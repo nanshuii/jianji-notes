@@ -1401,6 +1401,7 @@ export default function App() {
                   ref={richRef}
                   initial={active.body}
                   onChange={(body) => patch({ body })}
+                  onNotice={flashNotice}
                 />
               )}
             </section>

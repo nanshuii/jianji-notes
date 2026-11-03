@@ -5,7 +5,10 @@
  * 但界面上不再显示 Markdown 源码：打开是排好版的正文，输入什么就长成什么样。
  */
 
+import { DEFAULT_HEIGHT, EMBED_LANG, embedMetaJson, parseEmbedMeta } from './embed'
+
 export type Mark = { type: string; attrs?: Record<string, unknown> }
+
 export type PMNode = {
   type: string
   attrs?: Record<string, unknown>
@@ -162,6 +165,14 @@ export function mdToDoc(src: string): PMNode {
         i += 1
       }
       i += 1
+      // 网页卡片：围栏里只有一行元信息，真正的 .html 存在 .assets 里
+      if (lang === EMBED_LANG) {
+        const meta = parseEmbedMeta(buf.join('\n'))
+        if (meta) {
+          nodes.push({ type: 'htmlEmbed', attrs: { ...meta } })
+          continue
+        }
+      }
       nodes.push({
         type: 'codeBlock',
         attrs: { language: lang || null },
@@ -282,6 +293,8 @@ export function mdToDoc(src: string): PMNode {
   }
 
   if (nodes.length === 0) nodes.push({ type: 'paragraph' })
+  // 正文以网页卡片结尾时补一个空段落，光标才有地方落脚
+  else if (nodes[nodes.length - 1].type === 'htmlEmbed') nodes.push({ type: 'paragraph' })
   return { type: 'doc', content: nodes }
 }
 
@@ -339,6 +352,16 @@ function blockToMd(node: PMNode, depth = 0): string {
         .join('\n')
     case 'horizontalRule':
       return '---'
+    case 'htmlEmbed': {
+      const file = String(node.attrs?.file ?? '').trim()
+      if (!file) return ''
+      const h = Number(node.attrs?.height)
+      return `\`\`\`${EMBED_LANG}\n${embedMetaJson({
+        file,
+        title: String(node.attrs?.title ?? ''),
+        height: Number.isFinite(h) ? h : DEFAULT_HEIGHT,
+      })}\n\`\`\``
+    }
     case 'bulletList':
       return (node.content ?? [])
         .map((li) => `${pad}- ${(li.content ?? []).map((c) => blockToMd(c, depth + 1)).join('\n')}`)

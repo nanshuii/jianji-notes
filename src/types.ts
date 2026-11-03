@@ -149,11 +149,14 @@ export function toFileName(title: string, fallback = '未命名'): string {
 }
 
 const IMG_MD = /!\[[^\]]*\]\([^)]*\)/g
+/** 网页卡片：围栏里那行元信息不该出现在摘要/字数里 */
+const HTML_MD = /```jianji-html[ \t]*\n[\s\S]*?```/g
 
 export function snippet(body: string, len = 48): string {
   const text = body
     .replace(/^---[\s\S]*?---/, '')
     .replace(IMG_MD, '[图片]')
+    .replace(HTML_MD, '[网页]')
     .replace(/^#{1,6}\s*/gm, '')
     .replace(/^- \[[ xX]\]\s*/gm, '')
     .replace(/[*_`>~]/g, '')
@@ -166,6 +169,7 @@ export function wordCount(body: string): number {
   // 去掉图片（那串 base64 不算字数）和 Markdown 标记，接近「净字数」
   const text = body
     .replace(IMG_MD, '')
+    .replace(HTML_MD, '')
     .replace(/^#{1,6}\s*/gm, '')
     .replace(/^>\s?/gm, '')
     .replace(/^\s*[-*]\s+(\[[ xX]\]\s*)?/gm, '')

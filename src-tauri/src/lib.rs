@@ -23,7 +23,12 @@ pub fn run() {
             list_notebooks,
             create_notebook,
             rename_notebook,
-            delete_notebook
+            delete_notebook,
+            save_asset,
+            read_asset,
+            delete_asset,
+            open_asset,
+            read_external_file
         ])
         .run(tauri::generate_context!())
         .expect("启动简记失败");
@@ -281,6 +286,134 @@ fn delete_notebook(app: tauri::AppHandle, name: String, force: Option<bool>) -> 
     remove_notebook_dir(&base, &name, force.unwrap_or(false))
 }
 
+/// 用系统默认程序打开一个路径（访达 / 浏览器 / 默认应用）
+fn open_with_system(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", ""])
+            .arg(path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/* ---------------- 网页附件（笔记里嵌入的 .html） ---------------- */
+
+/// 附件目录：笔记根目录下的 .assets（隐藏目录，不会被当成笔记本扫进来）
+fn asset_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = dir_of(app)?.join(".assets");
+    fs::create_dir_all(&dir).map_err(|e| format!("创建附件目录失败: {e}"))?;
+    Ok(dir)
+}
+
+/// 附件名只允许「单层、.html 结尾、不含 ..」的文件名，防止跳出目录
+fn check_asset_name(name: &str) -> Result<(), String> {
+    if name.trim().is_empty() {
+        return Err("附件名为空".into());
+    }
+    if name.chars().count() > 120 {
+        return Err("附件名过长".into());
+    }
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err("非法的附件名".into());
+    }
+    if name.starts_with('.') {
+        return Err("附件名不能以 . 开头".into());
+    }
+    if !name.to_lowercase().ends_with(".html") {
+        return Err("只接受 .html 附件".into());
+    }
+    Ok(())
+}
+
+fn write_asset_in(dir: &Path, name: &str, content: &str) -> Result<(), String> {
+    check_asset_name(name)?;
+    fs::create_dir_all(dir).map_err(|e| format!("创建附件目录失败: {e}"))?;
+    let path = dir.join(name);
+    // 同样先写临时文件再改名，避免写一半断掉留下半个网页
+    let tmp = path.with_extension("html.tmp");
+    fs::write(&tmp, content).map_err(|e| format!("写入网页失败: {e}"))?;
+    fs::rename(&tmp, &path).map_err(|e| format!("保存网页失败: {e}"))?;
+    Ok(())
+}
+
+fn read_asset_in(dir: &Path, name: &str) -> Result<String, String> {
+    check_asset_name(name)?;
+    let path = dir.join(name);
+    if !path.exists() {
+        return Err("这个网页文件不见了".into());
+    }
+    fs::read_to_string(&path).map_err(|e| format!("读取网页失败: {e}"))
+}
+
+/// 保存一份网页到 .assets，返回文件名（笔记里存的也是这个文件名）
+#[tauri::command]
+fn save_asset(app: tauri::AppHandle, name: String, content: String) -> Result<String, String> {
+    write_asset_in(&asset_dir(&app)?, &name, &content)?;
+    Ok(name)
+}
+
+#[tauri::command]
+fn read_asset(app: tauri::AppHandle, name: String) -> Result<String, String> {
+    read_asset_in(&asset_dir(&app)?, &name)
+}
+
+#[tauri::command]
+fn delete_asset(app: tauri::AppHandle, name: String) -> Result<(), String> {
+    check_asset_name(&name)?;
+    let path = asset_dir(&app)?.join(&name);
+    if path.exists() {
+        fs::remove_file(&path).map_err(|e| format!("删除网页失败: {e}"))?;
+    }
+    Ok(())
+}
+
+/// 在浏览器里打开这份网页（用户想拿原文时用）
+#[tauri::command]
+fn open_asset(app: tauri::AppHandle, name: String) -> Result<(), String> {
+    check_asset_name(&name)?;
+    let path = asset_dir(&app)?.join(&name);
+    if !path.exists() {
+        return Err("这个网页文件不见了".into());
+    }
+    open_with_system(&path)
+}
+
+/// 读取用户拖进窗口的外部文件（Tauri 的原生拖放只给路径，不给内容）
+#[tauri::command]
+fn read_external_file(path: String) -> Result<String, String> {
+    let p = PathBuf::from(&path);
+    if p.extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_lowercase())
+        .map(|s| s == "html" || s == "htm" || s == "xhtml")
+        != Some(true)
+    {
+        return Err("只支持拖入 .html 网页文件".into());
+    }
+    let meta = fs::metadata(&p).map_err(|e| format!("读不到这个文件: {e}"))?;
+    if meta.len() > 32 * 1024 * 1024 {
+        return Err("网页太大了（超过 32MB）".into());
+    }
+    fs::read_to_string(&p).map_err(|e| format!("读取文件失败: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,5 +475,51 @@ mod tests {
         assert!(remove_notebook_dir(&base, "../etc", true).is_err());
         assert!(remove_notebook_dir(&base, ".hidden", true).is_err());
         fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn 附件名挡住穿越和非网页() {
+        assert!(check_asset_name("../逃出去.html").is_err());
+        assert!(check_asset_name("/etc/passwd.html").is_err());
+        assert!(check_asset_name(".隐藏.html").is_err());
+        assert!(check_asset_name("笔记.md").is_err());
+        assert!(check_asset_name("").is_err());
+        assert!(check_asset_name("20261103-1413-ab12.html").is_ok());
+        assert!(check_asset_name("大写.HTML").is_ok());
+    }
+
+    #[test]
+    fn 附件写入后能原样读回() {
+        let dir = temp_base("asset");
+        let html = "<!doctype html><html><body><h1>月报</h1></body></html>";
+        write_asset_in(&dir, "a.html", html).unwrap();
+        assert_eq!(read_asset_in(&dir, "a.html").unwrap(), html);
+        // 同名再写一次 = 覆盖，不留旧的 tmp
+        write_asset_in(&dir, "a.html", "<h1>新</h1>").unwrap();
+        assert_eq!(read_asset_in(&dir, "a.html").unwrap(), "<h1>新</h1>");
+        assert!(!dir.join("a.html.tmp").exists());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn 读不存在的附件会报错而不是空串() {
+        let dir = temp_base("assetmiss");
+        assert!(read_asset_in(&dir, "没有这个.html").is_err());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn 外部拖入只认网页文件() {
+        let dir = temp_base("drop");
+        let html = dir.join("报表.html");
+        fs::write(&html, "<h1>hi</h1>").unwrap();
+        assert_eq!(
+            read_external_file(html.to_string_lossy().to_string()).unwrap(),
+            "<h1>hi</h1>"
+        );
+        let txt = dir.join("说明.txt");
+        fs::write(&txt, "hi").unwrap();
+        assert!(read_external_file(txt.to_string_lossy().to_string()).is_err());
+        fs::remove_dir_all(&dir).ok();
     }
 }

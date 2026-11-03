@@ -12,6 +12,14 @@ export interface Storage {
   renameNotebook(from: string, to: string): Promise<void>
   /** force=true 时连同目录里剩下的文件一起删掉（笔记已由调用方处理） */
   removeNotebook(name: string, force?: boolean): Promise<void>
+  /* 网页附件（.assets 目录里的一份 .html，笔记正文只记文件名） */
+  saveAsset(name: string, content: string): Promise<string>
+  readAsset(name: string): Promise<string>
+  removeAsset(name: string): Promise<void>
+  /** 用系统默认程序（浏览器）打开这份网页 */
+  openAsset(name: string): Promise<void>
+  /** 读用户拖进窗口的外部文件；浏览器里没有绝对路径，所以会抛错 */
+  readDroppedFile(path: string): Promise<string>
 }
 
 function inTauri(): boolean {
@@ -56,12 +64,40 @@ const tauriStorage: Storage = {
   async removeNotebook(name, force = false) {
     await tauriInvoke('delete_notebook', { name, force })
   },
+  async saveAsset(name, content) {
+    return tauriInvoke<string>('save_asset', { name, content })
+  },
+  async readAsset(name) {
+    return tauriInvoke<string>('read_asset', { name })
+  },
+  async removeAsset(name) {
+    await tauriInvoke('delete_asset', { name })
+  },
+  async openAsset(name) {
+    await tauriInvoke('open_asset', { name })
+  },
+  async readDroppedFile(path) {
+    return tauriInvoke<string>('read_external_file', { path })
+  },
 }
 
 /* ---------------- 浏览器降级：localStorage ---------------- */
 
 const KEY = 'jianji.notes.v1'
 const NB_KEY = 'jianji.notebooks.v1'
+const ASSET_KEY = 'jianji.assets.v1'
+
+function readAssets(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(ASSET_KEY) || '{}') as Record<string, string>
+  } catch {
+    return {}
+  }
+}
+
+function writeAssets(data: Record<string, string>) {
+  localStorage.setItem(ASSET_KEY, JSON.stringify(data))
+}
 
 function readStore(): Record<string, string> {
   try {
@@ -139,6 +175,31 @@ const webStorage: Storage = {
       writeStore(data)
     }
     writeNotebooks(readNotebooks().filter((n) => n !== name))
+  },
+  async saveAsset(name, content) {
+    const data = readAssets()
+    data[name] = content
+    writeAssets(data)
+    return name
+  },
+  async readAsset(name) {
+    const html = readAssets()[name]
+    if (typeof html !== 'string') throw new Error('这个网页文件不见了')
+    return html
+  },
+  async removeAsset(name) {
+    const data = readAssets()
+    delete data[name]
+    writeAssets(data)
+  },
+  async openAsset(name) {
+    const html = readAssets()[name]
+    if (typeof html !== 'string') throw new Error('这个网页文件不见了')
+    const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }))
+    window.open(url, '_blank')
+  },
+  async readDroppedFile() {
+    throw new Error('浏览器预览模式拿不到本地路径，请用「HTML」按钮选文件')
   },
 }
 

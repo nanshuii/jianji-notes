@@ -14,6 +14,9 @@ import TaskList from '@tiptap/extension-task-list'
 import TaskItem from '@tiptap/extension-task-item'
 import Placeholder from '@tiptap/extension-placeholder'
 import { ResizableImage } from './ResizableImage'
+import { HtmlEmbed, insertHtmlEmbed } from './HtmlEmbed'
+import { isHtmlFile } from './embed'
+import { getStorage } from './storage'
 import { docToMd, mdToDoc } from './md-doc'
 import { fileToDataUrl } from './image'
 import { ImageToolbar, CropModal } from './ImageToolbar'
@@ -23,6 +26,8 @@ export type RichEditorHandle = {
   insertFiles: (files: FileList | File[] | null | undefined) => Promise<void>
   /** 弹出系统选图框（顶栏「图片」按钮用） */
   pickImage: () => void
+  /** 弹出系统选框，挑 .html 网页（顶栏「HTML」按钮用） */
+  pickHtml: () => void
   focus: () => void
 }
 
@@ -30,28 +35,35 @@ type Props = {
   /** 打开时的 Markdown 内容，只在挂载时读一次（切换笔记靠 key 重挂载） */
   initial: string
   onChange: (markdown: string) => void
+  /** 出问题时的轻提示（父组件负责显示） */
+  onNotice?: (msg: string) => void
   /** 图片按钮入口：把「选文件」交给父组件，父组件调用 ref 上的 insertFiles */
   onReady?: (handle: RichEditorHandle) => void
 }
 
-/** 选中的是图片文件就拦下来，交给 Tiptap 自己插节点 */
-function imageFilesOf(list: FileList | null | undefined): File[] {
-  return Array.from(list ?? []).filter((f) => f.type.startsWith('image/'))
+/** 能插进正文的文件：图片和 .html 网页 */
+function usableFiles(list: FileList | File[] | null | undefined): File[] {
+  return Array.from(list ?? []).filter((f) => f.type.startsWith('image/') || isHtmlFile(f))
 }
 
 export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
-  { initial, onChange, onReady },
+  { initial, onChange, onNotice, onReady },
   ref,
 ) {
   const lastEmitted = useRef(initial)
   const busy = useRef(false)
   const pickerRef = useRef<HTMLInputElement | null>(null)
+  const htmlPickerRef = useRef<HTMLInputElement | null>(null)
   // 编辑器只在首次创建时读取 options，用 ref 转一层，避免拿到过期的回调
-  const insertRef = useRef<(files: FileList | File[] | null | undefined) => Promise<void>>(
-    async () => {},
-  )
+  const insertRef = useRef<
+    (files: FileList | File[] | null | undefined, at?: number) => Promise<void>
+  >(async () => {})
   const changeRef = useRef(onChange)
   changeRef.current = onChange
+  const noticeRef = useRef(onNotice)
+  noticeRef.current = onNotice
+  /** 上一次 HTML5 拖放的时间：Tauri 的原生拖放和它可能同时到，用它去重 */
+  const lastDropAt = useRef(0)
   // 正在裁剪的图片（同时记住它在文档里的位置，裁剪结果按位置写回）
   const [crop, setCrop] = useState<{ src: string; pos: number } | null>(null)
 
@@ -65,6 +77,8 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
       // 行内节点（能挂在段落里，图片可以混在文字中间）；
       // 靠 CSS 浮动实现「图片靠左/靠右，文字绕排成多行」
       ResizableImage.configure({ allowBase64: true, inline: true }),
+      // 网页卡片：.html 直接嵌在正文里显示
+      HtmlEmbed,
       TaskList,
       TaskItem.configure({ nested: true }),
       Placeholder.configure({ placeholder: '从这里开始写…' }),
@@ -76,18 +90,33 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
     editorProps: {
       attributes: { class: 'rich-body', spellcheck: 'false' },
       handlePaste(_view, event) {
-        const files = imageFilesOf(event.clipboardData?.files)
+        const files = usableFiles(event.clipboardData?.files)
         if (files.length === 0) return false
         event.preventDefault()
         void insertRef.current(files)
         return true
       },
-      handleDrop(_view, event) {
-        const files = imageFilesOf((event as DragEvent).dataTransfer?.files)
-        if (files.length === 0) return false
+      handleDrop(view, event) {
+        const dropped = usableFiles((event as DragEvent).dataTransfer?.files)
+        if (dropped.length === 0) return false
         event.preventDefault()
-        void insertRef.current(files)
+        lastDropAt.current = Date.now()
+        // 按鼠标落点插，而不是插到上一次光标处
+        const at = view.posAtCoords({
+          left: (event as DragEvent).clientX,
+          top: (event as DragEvent).clientY,
+        })?.pos
+        void insertRef.current(dropped, at)
         return true
+      },
+      handleDOMEvents: {
+        // 拖文件进来时要先放行 dragover，否则浏览器不会发 drop
+        dragover(_view, event) {
+          const types = Array.from((event as DragEvent).dataTransfer?.types ?? [])
+          if (!types.includes('Files')) return false
+          event.preventDefault()
+          return true
+        },
       },
     },
     onUpdate({ editor: ed }) {
@@ -99,16 +128,27 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
   })
 
   const insertFiles = useCallback(
-    async (files: FileList | File[] | null | undefined) => {
+    async (files: FileList | File[] | null | undefined, at?: number) => {
       if (!editor || busy.current) return
-      const list = imageFilesOf(files as FileList)
+      const list = usableFiles(files)
       if (list.length === 0) return
       busy.current = true
       try {
         for (const file of list) {
-          const src = await fileToDataUrl(file)
-          editor.chain().focus().setImage({ src, alt: '' }).run()
+          if (isHtmlFile(file) && !file.type.startsWith('image/')) {
+            const html = await file.text()
+            if (!html.trim()) {
+              noticeRef.current?.(`「${file.name}」是空的，没插进来`)
+              continue
+            }
+            await insertHtmlEmbed(editor, html, file.name, at)
+          } else {
+            const src = await fileToDataUrl(file)
+            editor.chain().focus().setImage({ src, alt: '' }).run()
+          }
         }
+      } catch (e) {
+        noticeRef.current?.(`插入失败：${String((e as Error)?.message ?? e)}`)
       } finally {
         busy.current = false
       }
@@ -117,6 +157,7 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
   )
 
   const pickImage = useCallback(() => pickerRef.current?.click(), [])
+  const pickHtml = useCallback(() => htmlPickerRef.current?.click(), [])
 
   useEffect(() => {
     insertRef.current = insertFiles
@@ -127,14 +168,20 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
     () => ({
       insertFiles,
       pickImage,
+      pickHtml,
       focus: () => editor?.commands.focus('end'),
     }),
-    [editor, insertFiles, pickImage],
+    [editor, insertFiles, pickImage, pickHtml],
   )
 
   useEffect(() => {
     if (editor && onReady) {
-      onReady({ insertFiles, pickImage, focus: () => editor.commands.focus('end') })
+      onReady({
+        insertFiles,
+        pickImage,
+        pickHtml,
+        focus: () => editor.commands.focus('end'),
+      })
     }
     // 诊断用：确认富文本编辑器真的挂载成功（排查白屏时读这条记录）
     if (editor) {
@@ -144,12 +191,57 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
         /* 忽略 */
       }
     }
-  }, [editor, insertFiles, pickImage, onReady])
+  }, [editor, insertFiles, pickImage, pickHtml, onReady])
 
   // 诊断用：把编辑器实例挂出来，自动化测试和排障时能直接读选区状态
   useEffect(() => {
     if (editor) {
       ;(window as unknown as Record<string, unknown>).__ed = editor
+    }
+  }, [editor])
+
+  // 桌面端：Tauri 默认走原生拖放，网页拿不到 HTML5 的 drop 事件，
+  // 所以再挂一个原生监听，把拖进来的 .html 读出来插成卡片。
+  useEffect(() => {
+    if (!editor || !('__TAURI_INTERNALS__' in window)) return
+    let dead = false
+    let unlisten: (() => void) | null = null
+    void (async () => {
+      try {
+        const { getCurrentWebview } = await import('@tauri-apps/api/webview')
+        const un = await getCurrentWebview().onDragDropEvent((ev) => {
+          const p = ev.payload
+          if (p.type !== 'drop') return
+          // HTML5 那条已经处理过就别重复插
+          if (Date.now() - lastDropAt.current < 900) return
+          const pages = (p.paths ?? []).filter((path) => /\.(html?|xhtml)$/i.test(path))
+          if (pages.length === 0) return
+          const dpr = window.devicePixelRatio || 1
+          const at = editor.view.posAtCoords({
+            left: p.position.x / dpr,
+            top: p.position.y / dpr,
+          })?.pos
+          void (async () => {
+            for (const path of pages) {
+              const name = path.split(/[\\/]/).pop() || '网页'
+              try {
+                const html = await getStorage().readDroppedFile(path)
+                await insertHtmlEmbed(editor, html, name, at)
+              } catch (e) {
+                noticeRef.current?.(`没法读「${name}」：${String((e as Error)?.message ?? e)}`)
+              }
+            }
+          })()
+        })
+        if (dead) un()
+        else unlisten = un
+      } catch {
+        /* 浏览器预览模式没有这个能力 */
+      }
+    })()
+    return () => {
+      dead = true
+      unlisten?.()
     }
   }, [editor])
 
@@ -164,7 +256,11 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
       {imageSelected ? (
         <ImageToolbar editor={editor} onCrop={(src, pos) => setCrop({ src, pos })} />
       ) : (
-        <Toolbar editor={editor} onPickImage={() => pickerRef.current?.click()} />
+        <Toolbar
+          editor={editor}
+          onPickImage={() => pickerRef.current?.click()}
+          onPickHtml={() => htmlPickerRef.current?.click()}
+        />
       )}
       <div className="paper">
         <EditorContent editor={editor} />
@@ -208,11 +304,31 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
           e.target.value = ''
         }}
       />
+      <input
+        ref={htmlPickerRef}
+        className="html-picker"
+        type="file"
+        accept=".html,.htm,.xhtml,text/html"
+        multiple
+        hidden
+        onChange={(e) => {
+          void insertFiles(e.target.files)
+          e.target.value = ''
+        }}
+      />
     </div>
   )
 })
 
-function Toolbar({ editor, onPickImage }: { editor: Editor; onPickImage: () => void }) {
+function Toolbar({
+  editor,
+  onPickImage,
+  onPickHtml,
+}: {
+  editor: Editor
+  onPickImage: () => void
+  onPickHtml: () => void
+}) {
   const mark = (name: string, label: string, title: string, attrs?: Record<string, unknown>) => (
     <button
       key={name}
@@ -265,6 +381,14 @@ function Toolbar({ editor, onPickImage }: { editor: Editor; onPickImage: () => v
         onClick={onPickImage}
       >
         图片
+      </button>
+      <button
+        type="button"
+        title="插入 HTML 网页（WorkBuddy 生成的页面可以直接拖进来）"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={onPickHtml}
+      >
+        HTML
       </button>
     </div>
   )

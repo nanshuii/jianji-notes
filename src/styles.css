@@ -691,6 +691,8 @@ button {
   top: 0;
   z-index: 5;
   display: flex;
+  flex-wrap: wrap;
+  row-gap: 3px;
   align-items: center;
   gap: 2px;
   align-self: flex-start;
@@ -3291,4 +3293,301 @@ button {
   font-size: 13px;
   outline: none;
   box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* ---------------- 网页卡片（笔记里嵌入的 .html） ---------------- */
+
+.html-card {
+  position: relative;
+  margin: 14px 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(60, 50, 40, 0.04);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.html-card:hover {
+  border-color: #dcd5c9;
+  box-shadow: 0 3px 10px rgba(60, 50, 40, 0.07);
+}
+
+.html-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.html-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  row-gap: 4px;
+  padding: 6px 8px 6px 10px;
+  background: #faf8f4;
+  border-bottom: 1px solid #efeae1;
+  font-size: 12px;
+  color: var(--sub);
+  cursor: grab;
+  user-select: none;
+}
+
+.html-card-head:active {
+  cursor: grabbing;
+}
+
+.html-card-icon {
+  flex: none;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 5px;
+  padding: 2px 5px;
+  line-height: 1.3;
+}
+
+.html-card-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.html-card-size {
+  flex: none;
+  font-size: 11px;
+  color: var(--sub);
+  font-variant-numeric: tabular-nums;
+}
+
+.html-card-acts {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: 4px;
+}
+
+.html-act {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--sub);
+  font-size: 12.5px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.html-act:hover {
+  background: #eee9e0;
+  color: var(--text);
+}
+
+.html-act.del:hover {
+  background: #fbecea;
+  color: #a3352b;
+}
+
+.html-card-body {
+  position: relative;
+  background: #fff;
+  /* 窗口被拖窄时正文就剩一百多像素，网页再跟着缩就被压成一根竖条；
+     给网页留一条保底宽度，宁可卡片内部横向滚动 */
+  overflow-x: auto;
+}
+
+.html-frame {
+  display: block;
+  width: 100%;
+  min-width: 380px;
+  border: 0;
+  background: #fff;
+}
+
+.html-card-loading {
+  padding: 26px 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--sub);
+}
+
+.html-card-err {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 22px 16px;
+  text-align: center;
+  font-size: 12px;
+  color: #a3352b;
+}
+
+.html-card-err b {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.html-card-err span {
+  color: var(--sub);
+}
+
+.html-resize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 10px;
+  cursor: ns-resize;
+}
+
+.html-resize::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 3px;
+  width: 42px;
+  height: 3px;
+  margin-left: -21px;
+  border-radius: 2px;
+  background: rgba(60, 50, 40, 0.12);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.html-card:hover .html-resize::after,
+.html-card.selected .html-resize::after {
+  opacity: 1;
+}
+
+/* 拖动调高度期间的全屏透明罩：只为把鼠标事件留在主文档里 */
+.html-resize-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  cursor: ns-resize;
+  background: transparent;
+}
+
+.html-drag-hint {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  max-width: calc(100% - 20px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: rgba(37, 35, 31, 0.72);
+  color: #fff;
+  font-size: 10.5px;
+  line-height: 1.5;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.html-card:hover .html-drag-hint {
+  opacity: 1;
+}
+
+/* 全屏看网页 */
+.html-full {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3vh 3vw;
+  background: rgba(32, 30, 27, 0.46);
+  backdrop-filter: blur(3px);
+}
+
+.html-full-box {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+  box-shadow: 0 18px 60px rgba(20, 18, 16, 0.3);
+}
+
+.html-full-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: #faf8f4;
+}
+
+.html-full-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.html-full-acts {
+  display: flex;
+  gap: 8px;
+}
+
+.html-full-acts button {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--text);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.html-full-acts button:hover {
+  border-color: #d9d2c5;
+  background: #f7f4ef;
+}
+
+.html-full-acts button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.html-full-acts button.primary:hover {
+  background: #b15433;
+}
+
+.html-full-body {
+  flex: 1;
+  min-height: 0;
+}
+
+/* 编辑区变窄时，卡片头部先把文件大小让出去，别把按钮挤掉 */
+@media (max-width: 1100px) {
+  .html-card-size {
+    display: none;
+  }
+  .html-card-title {
+    min-width: 72px;
+  }
 }
