@@ -279,15 +279,18 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
 
   return (
     <div className="rich">
-      {imageSelected ? (
-        <ImageToolbar editor={editor} onCrop={(src, pos) => setCrop({ src, pos })} />
-      ) : (
-        <Toolbar
-          editor={editor}
-          onPickImage={() => pickerRef.current?.click()}
-          onPickHtml={() => htmlPickerRef.current?.click()}
-        />
-      )}
+      {/* 吸顶横条：滚动时挡住正文，里面的工具栏看起来就一直固定在顶上 */}
+      <div className="rich-tools-bar">
+        {imageSelected ? (
+          <ImageToolbar editor={editor} onCrop={(src, pos) => setCrop({ src, pos })} />
+        ) : (
+          <Toolbar
+            editor={editor}
+            onPickImage={() => pickerRef.current?.click()}
+            onPickHtml={() => htmlPickerRef.current?.click()}
+          />
+        )}
+      </div>
       <div className="paper">
         <EditorContent editor={editor} />
       </div>

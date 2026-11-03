@@ -673,7 +673,8 @@ button {
 .editor-body {
   flex: 1;
   overflow-y: auto;
-  padding: 14px 40px 48px;
+  --editor-pad-x: 40px;
+  padding: 14px var(--editor-pad-x) 48px;
 }
 
 /* ---------------- 富文本编辑区（所见即所得） ---------------- */
@@ -686,10 +687,30 @@ button {
   min-height: 100%;
 }
 
-.rich-tools {
+/* 工具栏吸顶用的那条「档板」。
+   吸顶不能直接挂在胶囊上：胶囊只有工具栏那么宽，正文会从它左右两侧和上边缘
+   钻出来，看起来像字压在按钮上。所以外面加一层撑满宽度的横条，毛玻璃白底把
+   滚过去的正文糊掉；胶囊还是原来那颗，位置一点没动。
+   top 用负值 + 负 margin 是了盖住 .editor-body 顶部那 14px 内边距 ——
+   不留这 14px 的话，正文会正好从那道缝里露出来一条。 */
+.rich-tools-bar {
   position: sticky;
-  top: 0;
-  z-index: 5;
+  top: -14px;
+  z-index: 6;
+  display: flex;
+  align-self: stretch;
+  margin-top: -14px;
+  margin-inline: calc(-1 * var(--editor-pad-x, 40px));
+  margin-bottom: -8px;
+  padding: 14px var(--editor-pad-x, 40px) 8px;
+  /* 白纸上就是白，米白底上几乎看不出（差 4/255），滚起来又刚好挡住正文 */
+  background: rgba(255, 255, 255, 0.93);
+  -webkit-backdrop-filter: blur(10px) saturate(1.3);
+  backdrop-filter: blur(10px) saturate(1.3);
+}
+
+.rich-tools {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   row-gap: 3px;
@@ -744,10 +765,9 @@ button {
   height: 0 !important;
 }
 
-/* 边框颜色：20 色色板 + 自定义 */
-.rich-tools {
-  position: relative;
-}
+/* 边框颜色：20 色色板 + 自定义。
+   色板是绝对定位，靠 .rich-tools 自己的 position: relative 定位（吸顶已经挪到
+   外面的 .rich-tools-bar 上了，这里相对定位不会被覆盖，别顺手改成 sticky）。 */
 
 .color-pop {
   position: absolute;
