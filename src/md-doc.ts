@@ -360,6 +360,7 @@ function blockToMd(node: PMNode, depth = 0): string {
         file,
         title: String(node.attrs?.title ?? ''),
         height: Number.isFinite(h) ? h : DEFAULT_HEIGHT,
+        zoom: Number(node.attrs?.zoom) || 1,
       })}\n\`\`\``
     }
     case 'bulletList':

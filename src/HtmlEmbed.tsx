@@ -15,8 +15,13 @@ import { createPortal } from 'react-dom'
 import { getStorage } from './storage'
 import {
   DEFAULT_HEIGHT,
+  DEFAULT_ZOOM,
   MAX_HEIGHT,
+  MAX_ZOOM,
   MIN_HEIGHT,
+  MIN_ZOOM,
+  ZOOM_STEP,
+  clampZoom,
   humanSize,
   makeAssetName,
   titleOf,
@@ -65,6 +70,11 @@ export const HtmlEmbed = Node.create({
         parseHTML: (el: HTMLElement) => Number(el.getAttribute('data-height')) || DEFAULT_HEIGHT,
         renderHTML: (attrs: Record<string, unknown>) => ({ 'data-height': attrs.height }),
       },
+      zoom: {
+        default: DEFAULT_ZOOM,
+        parseHTML: (el: HTMLElement) => clampZoom(el.getAttribute('data-zoom')),
+        renderHTML: (attrs: Record<string, unknown>) => ({ 'data-zoom': attrs.zoom }),
+      },
     }
   },
   parseHTML() {
@@ -101,7 +111,7 @@ export async function insertHtmlEmbed(
   at?: number,
 ): Promise<{ file: string; title: string; height: number }> {
   const file = await getStorage().saveAsset(makeAssetName(), html)
-  const attrs = { file, title: titleOf(fileName), height: DEFAULT_HEIGHT }
+  const attrs = { file, title: titleOf(fileName), height: DEFAULT_HEIGHT, zoom: DEFAULT_ZOOM }
   // 后面补一个空段落：不然卡片落在正文末尾时，光标没地方落脚没法接着写
   const nodes = [{ type: 'htmlEmbed', attrs }, { type: 'paragraph' }]
   const before = embedCount(editor)
@@ -149,11 +159,15 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
     MAX_HEIGHT,
     Math.max(MIN_HEIGHT, Number(node.attrs.height) || DEFAULT_HEIGHT),
   )
+  // 内容缩放：正文只有五百多像素时，按比例缩放的页面（流程图、看板）字会小到看不清
+  const zoom = clampZoom(node.attrs.zoom)
 
   const [html, setHtml] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [tick, setTick] = useState(0)
   const [liveH, setLiveH] = useState(height)
+  /** 屏幕上真正的高度 = 基准高度 × 缩放倍数 */
+  const shownH = Math.max(MIN_HEIGHT, Math.round(liveH * zoom))
   const [full, setFull] = useState(false)
   const [resizing, setResizing] = useState(false)
   const [renaming, setRenaming] = useState(false)
@@ -210,7 +224,7 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
     e.preventDefault()
     e.stopPropagation()
     const startY = e.clientY
-    const startH = liveH
+    const startH = shownH
     let next = startH
     document.body.style.userSelect = 'none'
     // 铺一层全屏透明罩接住鼠标：往下拖时指针会滑到别的网页卡片上，
@@ -218,18 +232,21 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
     setResizing(true)
     const move = (ev: MouseEvent) => {
       next = Math.round(Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, startH + ev.clientY - startY)))
-      setLiveH(next)
+      setLiveH(next / zoom)
     }
     const up = () => {
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', up)
       document.body.style.userSelect = ''
       setResizing(false)
-      updateAttributes({ height: next })
+      updateAttributes({ height: Math.max(MIN_HEIGHT, Math.round(next / zoom)) })
     }
     window.addEventListener('mousemove', move)
     window.addEventListener('mouseup', up)
   }
+
+  /** 放大 / 缩小网页内容：卡片内横向滚动，字跟着变大 */
+  const zoomBy = (delta: number) => updateAttributes({ zoom: clampZoom(zoom + delta) })
 
   /** 双击标题改名：回车/点别处保存，Esc 放弃，空名字当没改 */
   const startRename = () => {
@@ -263,36 +280,60 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
     wheelOff.current = () => doc.removeEventListener('wheel', onWheel)
   }
 
-  /** 短的网页别留一大片空白：第一次载入时按内容把高度收一收（只收不放） */
+  /**
+   * 首次载入时按内容把高度贴上去（只对还没动过的默认高度生效）。
+   *
+   * 之前只「收」不放，结果内容比 520 高的页面（流程图、看板）一进来就得在卡片里
+   * 上下滚，看着像被裁了一半；现在短了就收、长了就放，超过 900 才打住。
+   */
+  const FIT_MAX = 900
   const fitRef = useRef('')
-  const onFrameLoad = (e: React.SyntheticEvent<HTMLIFrameElement>) => {
-    const frameEl = e.currentTarget
-    attachWheel(frameEl)
-    if (fitRef.current === file) return
-    // 只收「还没动过」的默认高度，用户自己拖过的高度一律尊重
-    if (Math.abs(liveH - DEFAULT_HEIGHT) > 2) return
-    const doc = frameEl.contentDocument
-    if (!doc) return
-    fitRef.current = file
+  const frameRef = useRef<HTMLIFrameElement | null>(null)
+
+  /** 按内容把高度贴上去（只在还没人动过高度时调用） */
+  const fitToContent = () => {
+    const d = frameRef.current?.contentDocument
+    if (!d) return
     // 量 body 的高度：html 的 scrollHeight 至少等于视口，量出来永远「刚好装满」
-    const body = doc.body
+    const body = d.body
     const h = body
       ? Math.max(body.scrollHeight, Math.ceil(body.getBoundingClientRect().height))
-      : (doc.documentElement?.scrollHeight ?? 0)
-    if (h > 60 && h < liveH - 12) {
-      const next = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, h + 6))
-      setLiveH(next)
-      updateAttributes({ height: next })
-    }
+      : (d.documentElement?.scrollHeight ?? 0)
+    if (h <= 60) return
+    const next = Math.min(FIT_MAX, MAX_HEIGHT, Math.max(MIN_HEIGHT, h + 6))
+    if (Math.abs(next - liveH) <= 12) return
+    setLiveH(next)
+    updateAttributes({ height: next })
+  }
+
+  const onFrameLoad = (e: React.SyntheticEvent<HTMLIFrameElement>) => {
+    attachWheel(e.currentTarget)
+    // 已经贴合过就别反复动——用户之后拖的高度不能被重新载入冲掉
+    if (fitRef.current === file) return
+    // 放大过就别量——内容高度是按当前缩放算的，收下去会越收越小
+    if (zoom !== DEFAULT_ZOOM) return
+    // 只动「还没动过」的默认高度，用户自己拖过的高度一律尊重
+    if (Math.abs(liveH - DEFAULT_HEIGHT) > 2) return
+    fitRef.current = file
+    fitToContent()
+    // 靠脚本画图的页面（图表之类）在 load 之后才长出高度，稍等一下再量一次
+    window.setTimeout(() => fitToContent(), 350)
   }
 
   const frame = (
     <iframe
+      ref={frameRef}
       className="html-frame"
       title={title}
       srcDoc={html ?? ''}
       sandbox={SANDBOX}
-      style={{ height: liveH }}
+      // 缩放靠「把 iframe 的 CSS 宽度按倍数放大」实现：页面里的 width:100% 会跟着铺开，
+      // 内容整体变大，卡片内横向滚动；直接把内容 scale 会把布局一起缩回去，没用
+      style={{
+        height: shownH,
+        width: `${Math.round(zoom * 100)}%`,
+        minWidth: zoom >= DEFAULT_ZOOM ? 380 : 0,
+      }}
       onLoad={onFrameLoad}
     />
   )
@@ -347,6 +388,43 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
           </span>
         )}
         {html !== null && <span className="html-card-size">{humanSize(html.length)}</span>}
+        <span className="html-zoom" title="放大看细节：内容变大，卡片内可以左右滚动">
+          <button
+            type="button"
+            className="html-zoom-btn"
+            title="缩小"
+            disabled={zoom <= MIN_ZOOM}
+            onClick={(e) => {
+              e.stopPropagation()
+              zoomBy(-ZOOM_STEP)
+            }}
+          >
+            −
+          </button>
+          <button
+            type="button"
+            className="html-zoom-val"
+            title="回到 100%"
+            onClick={(e) => {
+              e.stopPropagation()
+              updateAttributes({ zoom: DEFAULT_ZOOM })
+            }}
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+          <button
+            type="button"
+            className="html-zoom-btn"
+            title="放大"
+            disabled={zoom >= MAX_ZOOM}
+            onClick={(e) => {
+              e.stopPropagation()
+              zoomBy(ZOOM_STEP)
+            }}
+          >
+            ＋
+          </button>
+        </span>
         <span className="html-card-acts">
           <button
             type="button"

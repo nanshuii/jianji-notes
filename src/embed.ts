@@ -15,6 +15,12 @@ export const DEFAULT_HEIGHT = 520
 export const MIN_HEIGHT = 160
 export const MAX_HEIGHT = 2000
 
+/** 网页内容的缩放倍数：流程图这类页面按宽度缩，正文窄的时候字会小到看不清 */
+export const DEFAULT_ZOOM = 1
+export const MIN_ZOOM = 0.5
+export const MAX_ZOOM = 2.5
+export const ZOOM_STEP = 0.25
+
 export type EmbedMeta = {
   /** .assets 里的文件名 */
   file: string
@@ -22,6 +28,15 @@ export type EmbedMeta = {
   title: string
   /** 卡片高度（像素），可拖动改 */
   height: number
+  /** 内容缩放倍数，1 = 按卡片宽度铺满 */
+  zoom?: number
+}
+
+/** 把任意输入夹到合法的缩放范围里，缺省/非法都当 1 */
+export function clampZoom(z: unknown): number {
+  const n = Number(z)
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_ZOOM
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(n * 100) / 100))
 }
 
 const HTML_EXT = /\.(html?|xhtml)$/i
@@ -65,16 +80,22 @@ export function parseEmbedMeta(raw: string): EmbedMeta | null {
     const height = Number.isFinite(h)
       ? Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, Math.round(h)))
       : DEFAULT_HEIGHT
-    return { file, title, height }
+    const zoom = clampZoom(o.zoom)
+    return { file, title, height, zoom }
   } catch {
     return null
   }
 }
 
-/** 元信息 → 一行 JSON（写进 Markdown 的围栏里） */
+/** 元信息 → 一行 JSON（写进 Markdown 的围栏里）；zoom=1 就不写，保持老格式干净 */
 export function embedMetaJson(m: EmbedMeta): string {
   const height = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, Math.round(m.height || DEFAULT_HEIGHT)))
-  return JSON.stringify({ file: m.file, title: m.title ?? '', height })
+  const zoom = clampZoom(m.zoom)
+  return JSON.stringify(
+    zoom === DEFAULT_ZOOM
+      ? { file: m.file, title: m.title ?? '', height }
+      : { file: m.file, title: m.title ?? '', height, zoom },
+  )
 }
 
 /** 12.3 KB / 1.4 MB */

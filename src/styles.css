@@ -870,7 +870,9 @@ button {
 .paper {
   flex: 1;
   min-height: 62vh;
-  padding: 38px 46px 52px;
+  /* 左右留白抽成变量：网页卡片要「出血」铺到纸张边缘，得知道自己能借多少 */
+  --paper-pad-x: 46px;
+  padding: 38px var(--paper-pad-x) 52px;
   background: #fff;
   border: 1px solid #eee9e1;
   border-radius: 12px;
@@ -3299,7 +3301,9 @@ button {
 
 .html-card {
   position: relative;
-  margin: 14px 0;
+  /* 出血到纸张的左右留白里：正文那 46px 是给文字排版的，网页卡片白吃这份边距，
+     本来就只有五百多像素的图又被压小一圈 */
+  margin: 14px calc(-1 * var(--paper-pad-x, 46px));
   border: 1px solid var(--line);
   border-radius: 10px;
   background: #fff;
@@ -3389,6 +3393,62 @@ button {
   align-items: center;
   gap: 1px;
   margin-left: 4px;
+}
+
+/* 缩放：正文窄的时候，按宽度自适应的网页会整体缩小，靠它把字放大 */
+.html-zoom {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: 6px;
+  padding: 1px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfaf8;
+}
+
+.html-zoom-btn {
+  width: 17px;
+  height: 17px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--sub);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.html-zoom-btn:hover:not(:disabled) {
+  background: #efeae1;
+  color: var(--text);
+}
+
+.html-zoom-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.html-zoom-val {
+  min-width: 36px;
+  height: 17px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--sub);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.html-zoom-val:hover {
+  background: #efeae1;
+  color: var(--text);
 }
 
 .html-act {
