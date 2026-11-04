@@ -758,6 +758,41 @@ button {
   font-size: 12px;
 }
 
+/* 撤回 / 重做：右边那颗小圆标是「还剩几步」，固定宽度避免数字跳动带着按钮抖 */
+.rich-tools button.hist-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px 0 8px;
+  white-space: nowrap;
+}
+
+.rich-tools .hist-count {
+  display: inline-block;
+  min-width: 20px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #f1ede6;
+  color: #8a8378;
+  font-size: 10.5px;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.rich-tools button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.rich-tools button:disabled:hover {
+  background: transparent;
+}
+
+.rich-tools button.hist-btn:hover:not(:disabled) .hist-count {
+  background: #e8e2d8;
+}
+
 /* ProseMirror 会在行内节点两侧塞辅助用的空 img，不隐藏会显示成“加载失败”的小方块 */
 .rich-body img.ProseMirror-separator {
   display: none !important;

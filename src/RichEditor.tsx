@@ -21,6 +21,10 @@ import { docToMd, mdToDoc } from './md-doc'
 import { fileToDataUrl } from './image'
 import { ImageToolbar, CropModal } from './ImageToolbar'
 import { NodeSelection } from '@tiptap/pm/state'
+import { undoDepth, redoDepth } from '@tiptap/pm/history'
+
+/** 撤销/重做栈的上限；连续输入在 500ms 内算一步，避免一个字占掉一步 */
+const HISTORY_DEPTH = 100
 
 export type RichEditorHandle = {
   insertFiles: (files: FileList | File[] | null | undefined) => Promise<void>
@@ -76,6 +80,8 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
       StarterKit.configure({
         heading: { levels: [1, 2, 3] },
         codeBlock: { HTMLAttributes: { class: 'code' } },
+        // 撤回步数写死在这里，和按钮上显示的「最多 N 步」保持一致
+        history: { depth: HISTORY_DEPTH, newGroupDelay: 500 },
       }),
       Link.configure({ openOnClick: false, autolink: true }),
       // 行内节点（能挂在段落里，图片可以混在文字中间）；
@@ -358,6 +364,10 @@ function Toolbar({
   onPickImage: () => void
   onPickHtml: () => void
 }) {
+  // useEditor 默认每个事务都会重渲染，这里读到的步数是实时的
+  const undoSteps = Math.min(undoDepth(editor.state), HISTORY_DEPTH)
+  const redoSteps = Math.min(redoDepth(editor.state), HISTORY_DEPTH)
+
   const mark = (name: string, label: string, title: string, attrs?: Record<string, unknown>) => (
     <button
       key={name}
@@ -418,6 +428,29 @@ function Toolbar({
         onClick={onPickHtml}
       >
         HTML
+      </button>
+      <span className="sep" />
+      <button
+        type="button"
+        className="hist-btn"
+        title={`撤回上一步（还能撤 ${undoSteps} 步，最多 ${HISTORY_DEPTH} 步；⌘Z）`}
+        aria-label="撤回"
+        disabled={undoSteps === 0}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => editor.commands.undo()}
+      >
+        ↶ 撤回<span className="hist-count">{undoSteps}</span>
+      </button>
+      <button
+        type="button"
+        className="hist-btn"
+        title={`重做刚撤回的那步（还能重做 ${redoSteps} 步；⌘⇧Z）`}
+        aria-label="重做"
+        disabled={redoSteps === 0}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => editor.commands.redo()}
+      >
+        ↷ 重做<span className="hist-count">{redoSteps}</span>
       </button>
     </div>
   )
