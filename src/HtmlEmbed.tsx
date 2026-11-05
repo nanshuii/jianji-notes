@@ -34,6 +34,34 @@ import {
 const SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals'
 
 /**
+ * srcDoc iframe 的 base URL 继承自父文档，页面里的 href="#id" 会被解析成「父页面 URL + #id」。
+ * 点一下等于让 iframe 导航到父页面：卡片内容整块白掉，甚至套一层应用首页。
+ * 这里在 iframe 文档上用捕获阶段拦下锚点点击，改成卡片内部滚动，用户的 HTML 一个字不改。
+ * WeakMap 按文档去重（刷新后是新文档，会自然重新注入），文档销毁时监听随之回收。
+ */
+const anchorCleanups = new WeakMap<Document, () => void>()
+function attachAnchors(frame: HTMLIFrameElement) {
+  const doc = frame.contentDocument
+  if (!doc || anchorCleanups.has(doc)) return
+  const onClick = (ev: MouseEvent) => {
+    // 普通左键才接管；⌘/Ctrl/Shift 点击、页面自己已处理过的都放行
+    if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return
+    const el = ev.target as Element | null
+    const a = el?.closest?.('a[href^="#"]') as HTMLAnchorElement | null
+    if (!a || (a.target && a.target !== '_self')) return
+    let id = (a.getAttribute('href') ?? '').slice(1)
+    try { id = decodeURIComponent(id) } catch { /* 编码不合法就按原值找 */ }
+    // 目标找不到也要拦：放过去同样会把 iframe 导航出去
+    ev.preventDefault()
+    if (!id) { doc.defaultView?.scrollTo({ top: 0 }); return }
+    const target = doc.getElementById(id) ?? doc.querySelector(`[name="${CSS.escape(id)}"]`)
+    target?.scrollIntoView({ block: 'start' })
+  }
+  doc.addEventListener('click', onClick, true)
+  anchorCleanups.set(doc, () => doc.removeEventListener('click', onClick, true))
+}
+
+/**
  * 找卡片外面的滚动容器：鼠标在网页里滚到底还想接着往下滚时，把滚动接力给它。
  * 从卡片往上找第一个「真的能滚」的元素，找不到就用整页。
  */
@@ -308,6 +336,7 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
 
   const onFrameLoad = (e: React.SyntheticEvent<HTMLIFrameElement>) => {
     attachWheel(e.currentTarget)
+    attachAnchors(e.currentTarget)
     // 已经贴合过就别反复动——用户之后拖的高度不能被重新载入冲掉
     if (fitRef.current === file) return
     // 放大过就别量——内容高度是按当前缩放算的，收下去会越收越小
@@ -531,6 +560,7 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
                     srcDoc={html}
                     sandbox={SANDBOX}
                     style={{ height: '100%' }}
+                    onLoad={(e) => attachAnchors(e.currentTarget)}
                   />
                 )}
               </div>
