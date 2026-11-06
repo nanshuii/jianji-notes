@@ -163,7 +163,10 @@ check('网页后还能接着写笔记', md1.includes('网页后面补的一句�
 check('写完网页还在', /"mode":"inline"/.test(md1))
 
 /* ---- 6. 模式可以来回切 ---- */
-await evaluate(`document.querySelector('.html-inline-mode').click()`)
+await evaluate(`(() => {
+  const b = [...document.querySelectorAll('.html-inline-mode')].find((x) => (x.textContent || '').includes('卡片'))
+  if (b) b.click()
+})()`)
 await sleep(700)
 check('工具条能切回卡片模式', (await countOf('.html-card:not(.inline)')) === 1 && (await countOf('.html-card-head')) === 1)
 check('切回卡片后高度写回元信息', await evaluate(`window.__ed.state.doc.content.content.some(n => n.type.name === 'htmlEmbed' && n.attrs.mode === 'card')`))

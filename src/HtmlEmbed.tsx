@@ -13,6 +13,7 @@ import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from '@tip
 import { NodeSelection } from '@tiptap/pm/state'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { backupName, editStyleText, isInteractive, serializeDoc } from './htmledit'
 import { getStorage } from './storage'
 import {
   DEFAULT_HEIGHT,
@@ -240,6 +241,8 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
   const [html, setHtml] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [tick, setTick] = useState(0)
+  /** iframe 的重载序号：改 key 强制换一个新文档（srcDoc 字符串没变时它不会自己重载） */
+  const [frameSeq, setFrameSeq] = useState(0)
   const [liveH, setLiveH] = useState(height)
   /** 融入模式下量出来的内容高度；0 = 还没量到，先用笔记里记的高度 */
   const [autoH, setAutoH] = useState(0)
@@ -249,6 +252,15 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
   const [resizing, setResizing] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [draft, setDraft] = useState('')
+  /** 正在网页里改字：iframe 的 body 被临时设成可编辑 */
+  const [editing, setEditing] = useState(false)
+  const [dirty, setDirty] = useState(false)
+  const [saving, setSaving] = useState(false)
+  /** 编辑条上的一句提示（保存成功 / 失败原因），几秒后自动消失 */
+  const [note, setNote] = useState('')
+  /** 「改源码」弹窗 */
+  const [srcOpen, setSrcOpen] = useState(false)
+  const [srcText, setSrcText] = useState('')
   const cardRef = useRef<HTMLDivElement | null>(null)
   const nameRef = useRef<HTMLInputElement | null>(null)
   const wheelOff = useRef<(() => void) | null>(null)
@@ -403,6 +415,8 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
       return
     }
     const script = doc.createElement('script')
+    // 带标记：在笔记里改完内容保存时，要把这个注入的脚本从文件里摘掉
+    script.setAttribute('data-jianji-injected', 'autoheight')
     script.textContent = `(function () {
   var W = window;
   // srcDoc 装载会换掉 document 但 window 可能复用：标记必须挂在「这份文档」上，
@@ -531,9 +545,187 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
     window.setTimeout(() => fitToContent(), 350)
   }
 
+  /* ---------------- 在笔记里改网页内容 ---------------- */
+
+  /**
+   * 进编辑前记下：原文件内容（取消时按它还原）、body 本来是不是就可编辑、
+   * 以及怎么把这次编辑挂的监听和样式摘干净。
+   */
+  const editRef = useRef<{ source: string; hadEditable: boolean; cleanup: () => void } | null>(null)
+  const savingRef = useRef(false)
+
+  const flash = (text: string) => {
+    setNote(text)
+    window.setTimeout(() => setNote((cur) => (cur === text ? '' : cur)), 3200)
+  }
+
+  const stopEditDom = () => {
+    const ref = editRef.current
+    editRef.current = null
+    ref?.cleanup()
+    setEditing(false)
+    setDirty(false)
+  }
+
+  /** 取消：网页里改过的 DOM 整块丢掉，重新按文件内容载入 */
+  const cancelEdit = () => {
+    if (savingRef.current) return
+    const source = editRef.current?.source
+    stopEditDom()
+    if (typeof source !== 'string') return
+    setHtml(source)
+    // 换 key 强制重载：srcDoc 是同一份字符串时 DOM 不会重建，改过的字会留在那儿
+    setFrameSeq((v) => v + 1)
+  }
+
+  /** 保存：把网页当前的 DOM 序列化后写回 .assets 里那份 .html */
+  const saveEdit = async () => {
+    const ref = editRef.current
+    const doc = frameRef.current?.contentDocument
+    if (!ref || !doc || savingRef.current) return
+    savingRef.current = true
+    setSaving(true)
+    try {
+      const prev = ref.source
+      const next = serializeDoc(doc, { source: prev, dropEditable: !ref.hadEditable })
+      if (next === prev) {
+        stopEditDom()
+        flash('没有改动')
+        return
+      }
+      const store = getStorage()
+      // 上一版留个底：万一改坏了，同目录的 .bak.html 还能捞回来
+      try {
+        await store.saveAsset(backupName(file), prev)
+      } catch {
+        /* 备份失败不挡保存 */
+      }
+      await store.saveAsset(file, next)
+      stopEditDom()
+      setHtml(next)
+      setFrameSeq((v) => v + 1)
+      flash('已保存到网页文件')
+    } catch (e) {
+      flash(`没存上：${String((e as Error)?.message ?? e)}`)
+    } finally {
+      savingRef.current = false
+      setSaving(false)
+    }
+  }
+
+  const enterEdit = () => {
+    const doc = frameRef.current?.contentDocument
+    const win = doc?.defaultView
+    if (!doc?.body || !win || editing) return
+    const source = html ?? ''
+    const body = doc.body
+    const hadEditable = body.hasAttribute('contenteditable')
+    // 编辑时按钮/链接只是普通文字：不然点一下脚本就跑、点链接页面就跳走
+    const style = doc.createElement('style')
+    style.setAttribute('data-jianji-injected', 'edit')
+    style.textContent = editStyleText()
+    doc.head?.appendChild(style)
+    body.setAttribute('contenteditable', 'true')
+
+    const onClick = (ev: MouseEvent) => {
+      if (!isInteractive(ev.target)) return
+      ev.preventDefault()
+      ev.stopPropagation()
+    }
+    const onInput = () => setDirty(true)
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') {
+        ev.preventDefault()
+        ev.stopPropagation()
+        cancelEdit()
+      } else if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 's') {
+        ev.preventDefault()
+        ev.stopPropagation()
+        void saveEdit()
+      }
+    }
+    doc.addEventListener('click', onClick, true)
+    doc.addEventListener('input', onInput, true)
+    doc.addEventListener('keydown', onKey, true)
+
+    editRef.current = {
+      source,
+      hadEditable,
+      cleanup: () => {
+        doc.removeEventListener('click', onClick, true)
+        doc.removeEventListener('input', onInput, true)
+        doc.removeEventListener('keydown', onKey, true)
+        style.remove()
+        if (!hadEditable) doc.body?.removeAttribute('contenteditable')
+      },
+    }
+
+    // 光标先送到正文末尾，接着就能直接改字（没有内容可改也不会报错）
+    try {
+      win.focus()
+      const sel = win.getSelection()
+      const range = doc.createRange()
+      range.selectNodeContents(body)
+      range.collapse(false)
+      sel?.removeAllRanges()
+      sel?.addRange(range)
+    } catch {
+      /* 放不进去光标也不影响能不能改 */
+    }
+    setEditing(true)
+    setDirty(false)
+    setNote('')
+  }
+
+  const openSource = () => {
+    setSrcText(html ?? '')
+    setSrcOpen(true)
+  }
+
+  /** 改源码：完全按文本存，适合需要精确控制文件结构的时候 */
+  const saveSource = async () => {
+    if (savingRef.current) return
+    if (!srcText.trim()) {
+      flash('源码是空的，没保存')
+      return
+    }
+    savingRef.current = true
+    setSaving(true)
+    try {
+      const store = getStorage()
+      const prev = html ?? ''
+      if (srcText === prev) {
+        setSrcOpen(false)
+        stopEditDom()
+        setTick((v) => v + 1)
+        setFrameSeq((v) => v + 1)
+        flash('没有改动')
+        return
+      }
+      try {
+        await store.saveAsset(backupName(file), prev)
+      } catch {
+        /* 备份失败不挡保存 */
+      }
+      await store.saveAsset(file, srcText)
+      const next = srcText
+      setSrcOpen(false)
+      stopEditDom()
+      setHtml(next)
+      setFrameSeq((v) => v + 1)
+      flash('已保存到网页文件')
+    } catch (e) {
+      flash(`没存上：${String((e as Error)?.message ?? e)}`)
+    } finally {
+      savingRef.current = false
+      setSaving(false)
+    }
+  }
+
   const frame = (
     <iframe
       ref={frameRef}
+      key={`frame-${frameSeq}`}
       className="html-frame"
       title={title}
       srcDoc={html ?? ''}
@@ -563,8 +755,37 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
         editor.commands.setNodeSelection(pos)
       }}
     >
+      {/* 改字模式：顶上一条「保存 / 取消 / 源码」，网页里点哪改哪 */}
+      {editing && (
+        <div
+          className="html-edit-bar"
+          contentEditable={false}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <span className="html-edit-tag">✎ 改字中</span>
+          <span className="html-edit-tip">
+            {note || (dirty ? '改完点保存（⌘S），改动会写进网页文件' : '点网页里的文字就能直接改')}
+          </span>
+          <button type="button" className="html-edit-btn" disabled={saving} onClick={openSource}>
+            源码
+          </button>
+          <button type="button" className="html-edit-btn" disabled={saving} onClick={cancelEdit}>
+            取消
+          </button>
+          <button
+            type="button"
+            className="html-edit-btn primary"
+            disabled={saving}
+            onClick={() => void saveEdit()}
+          >
+            {saving ? '保存中…' : '保存'}
+          </button>
+        </div>
+      )}
+
       {/* 融入正文：平时只有一个很淡的小工具条，鼠标移上去才清晰，不占正文高度 */}
-      {inline && (
+      {inline && !editing && (
         <div
           className="html-inline-tools"
           contentEditable={false}
@@ -597,19 +818,37 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
           <button
             type="button"
             className="html-inline-mode"
+            title="改网页里的文字：点哪改哪，改完存回网页文件（特效照常）"
+            onClick={() => enterEdit()}
+          >
+            ✎ 编辑
+          </button>
+          <button
+            type="button"
+            className="html-inline-mode"
             title="切回卡片模式：固定高度、可缩放"
             onClick={() => switchMode('card')}
           >
             ▣ 卡片
           </button>
-          <button type="button" className="html-act" title="重新载入（文件被改过时用）" onClick={() => setTick((v) => v + 1)}>↻</button>
+          <button
+            type="button"
+            className="html-act"
+            title="重新载入（文件被改过时用）"
+            onClick={() => {
+              setTick((v) => v + 1)
+              setFrameSeq((v) => v + 1)
+            }}
+          >
+            ↻
+          </button>
           <button type="button" className="html-act" title="全屏看" onClick={() => setFull(true)}>⛶</button>
           <button type="button" className="html-act" title="用浏览器打开原文件" onClick={() => void openInBrowser()}>↗</button>
           <button type="button" className="html-act del" title="从笔记里移除（不会删掉 .assets 里的文件）" onClick={() => deleteNode()}>×</button>
         </div>
       )}
 
-      {!inline && (
+      {!inline && !editing && (
         <div className="html-card-head" data-drag-handle title="按住拖动可挪位置">
         <span className="html-card-icon">{'</>'}</span>
         {renaming ? (
@@ -698,10 +937,22 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
           <button
             type="button"
             className="html-act"
+            title="改网页里的文字：点哪改哪，改完存回网页文件（特效照常）"
+            onClick={(e) => {
+              e.stopPropagation()
+              enterEdit()
+            }}
+          >
+            ✎
+          </button>
+          <button
+            type="button"
+            className="html-act"
             title="重新载入（文件被改过时用）"
             onClick={(e) => {
               e.stopPropagation()
               setTick((v) => v + 1)
+              setFrameSeq((v) => v + 1)
             }}
           >
             ↻
@@ -809,6 +1060,56 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
                   />
                 )}
               </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+
+      {srcOpen &&
+        createPortal(
+          <div
+            className="html-full"
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) setSrcOpen(false)
+            }}
+          >
+            <div className="html-src-box">
+              <div className="html-full-head">
+                <span className="html-full-title">改源码 · {title}</span>
+                <span className="html-full-acts">
+                  <button type="button" onClick={() => void openInBrowser()}>
+                    看原文
+                  </button>
+                  <button type="button" disabled={saving} onClick={() => setSrcOpen(false)}>
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={saving}
+                    onClick={() => void saveSource()}
+                  >
+                    {saving ? '保存中…' : '保存'}
+                  </button>
+                </span>
+              </div>
+              <textarea
+                className="html-src-text"
+                value={srcText}
+                spellCheck={false}
+                placeholder="这里是这份网页的 HTML 源码，改完点保存（⌘S）"
+                onChange={(e) => setSrcText(e.target.value)}
+                onKeyDown={(e) => {
+                  e.stopPropagation()
+                  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+                    e.preventDefault()
+                    void saveSource()
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault()
+                    setSrcOpen(false)
+                  }
+                }}
+              />
             </div>
           </div>,
           document.body,
