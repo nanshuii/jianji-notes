@@ -28,6 +28,7 @@ pub fn run() {
             read_asset,
             delete_asset,
             open_asset,
+            open_url,
             read_external_file
         ])
         .run(tauri::generate_context!())
@@ -393,6 +394,17 @@ fn open_asset(app: tauri::AppHandle, name: String) -> Result<(), String> {
         return Err("这个网页文件不见了".into());
     }
     open_with_system(&path)
+}
+
+/// 正文里的普通 http(s) 外链，用系统默认浏览器打开。
+/// 只放行 http/https，避免笔记里的链接被拿去执行本地命令。
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    let u = url.trim();
+    if !(u.starts_with("http://") || u.starts_with("https://")) {
+        return Err("只支持 http/https 链接".into());
+    }
+    open_with_system(Path::new(u))
 }
 
 /// 读取用户拖进窗口的外部文件（Tauri 的原生拖放只给路径，不给内容）

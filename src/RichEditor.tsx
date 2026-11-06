@@ -22,6 +22,10 @@ import { fileToDataUrl } from './image'
 import { ImageToolbar, CropModal } from './ImageToolbar'
 import { NodeSelection } from '@tiptap/pm/state'
 import { undoDepth, redoDepth } from '@tiptap/pm/history'
+import { buildNoteLink, parseNoteLink, isExternalUrl } from './notelink'
+import { JumpHighlight, flashJump } from './jumpHighlight'
+import { NoteLinkDialog } from './NoteLinkDialog'
+import type { NoteOption } from './NoteLinkDialog'
 
 /** 撤销/重做栈的上限；连续输入在 500ms 内算一步，避免一个字占掉一步 */
 const HISTORY_DEPTH = 100
@@ -43,6 +47,14 @@ type Props = {
   onNotice?: (msg: string) => void
   /** 图片按钮入口：把「选文件」交给父组件，父组件调用 ref 上的 insertFiles */
   onReady?: (handle: RichEditorHandle) => void
+  /** 所有笔记，供「链接到笔记」弹窗挑目标笔记和目标行 */
+  notes?: NoteOption[]
+  /** 当前笔记路径，弹窗里不列自己 */
+  currentFile?: string
+  /** 点了笔记内链接：父组件负责切笔记，并把定位文字带过去 */
+  onJumpNote?: (file: string, text: string) => void
+  /** 刚跳过来时要高亮的那一段文字；token 保证重复跳同一段也会重新触发 */
+  jumpTo?: { text: string; token: number } | null
 }
 
 /** 能插进正文的文件：图片和 .html 网页 */
@@ -53,7 +65,7 @@ function usableFiles(list: FileList | File[] | null | undefined): File[] {
 const ONLY_TIP = '只认图片和 .html 网页文件，其它类型没插进来'
 
 export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
-  { initial, onChange, onNotice, onReady },
+  { initial, onChange, onNotice, onReady, notes, currentFile, onJumpNote, jumpTo },
   ref,
 ) {
   const lastEmitted = useRef(initial)
@@ -68,6 +80,12 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
   changeRef.current = onChange
   const noticeRef = useRef(onNotice)
   noticeRef.current = onNotice
+  // 编辑器只在创建时读一次 options，回调一律用 ref 转一层，避免拿到过期的
+  const jumpRef = useRef(onJumpNote)
+  jumpRef.current = onJumpNote
+  const notesRef = useRef(notes)
+  notesRef.current = notes
+  const [linkDialog, setLinkDialog] = useState<{ selectedText: string; hasLink: boolean } | null>(null)
   /** 上一次 HTML5 拖放的时间：Tauri 的原生拖放和它可能同时到，用它去重 */
   const lastDropAt = useRef(0)
   /** 始终指向当前活着的编辑器：拖放的异步过程里编辑器可能被换掉，别再往旧的里插 */
@@ -83,7 +101,10 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
         // 撤回步数写死在这里，和按钮上显示的「最多 N 步」保持一致
         history: { depth: HISTORY_DEPTH, newGroupDelay: 500 },
       }),
-      Link.configure({ openOnClick: false, autolink: true }),
+      // 笔记内链接用 jianji: 自定义 scheme。Link 默认只放行 http/mailto 等，
+      // 不注册的话 setLink 会直接拒绝，renderHTML 还会把 href 清空。
+      // 只额外放行 jianji: 一种，javascript: 之类仍然拦着。
+      Link.configure({ openOnClick: false, autolink: true, protocols: ['jianji'] }),
       // 行内节点（能挂在段落里，图片可以混在文字中间）；
       // 靠 CSS 浮动实现「图片靠左/靠右，文字绕排成多行」
       ResizableImage.configure({ allowBase64: true, inline: true }),
@@ -91,6 +112,7 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
       HtmlEmbed,
       TaskList,
       TaskItem.configure({ nested: true }),
+      JumpHighlight,
       Placeholder.configure({ placeholder: '从这里开始写…' }),
     ],
     content: mdToDoc(initial),
@@ -99,6 +121,28 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
     autofocus: false,
     editorProps: {
       attributes: { class: 'rich-body', spellcheck: 'false' },
+      /** 点链接：笔记内链接切过去，普通网址交给系统浏览器；⌥点击仍是编辑光标 */
+      handleClick(_view, _pos, event) {
+        const el = event.target as HTMLElement | null
+        const a = el?.closest?.('a[href]') as HTMLAnchorElement | null
+        if (!a) return false
+        const href = a.getAttribute('href') ?? ''
+        if (event.altKey) return false
+        const target = parseNoteLink(href)
+        if (target) {
+          event.preventDefault()
+          jumpRef.current?.(target.file, target.text)
+          return true
+        }
+        if (isExternalUrl(href)) {
+          event.preventDefault()
+          void getStorage()
+            .openUrl(href)
+            .catch((err) => noticeRef.current?.(String(err)))
+          return true
+        }
+        return false
+      },
       handlePaste(_view, event) {
         const all = event.clipboardData?.files
         const files = usableFiles(all)
@@ -184,6 +228,36 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
   const pickImage = useCallback(() => pickerRef.current?.click(), [])
   const pickHtml = useCallback(() => htmlPickerRef.current?.click(), [])
 
+  /** 工具条「笔记链接」：先记住当前选区，再让弹窗挑目标笔记和目标行 */
+  const openLinkDialog = useCallback(() => {
+    const ed = editorRef.current
+    if (!ed) return
+    const { from, to, empty } = ed.state.selection
+    const selectedText = empty ? '' : ed.state.doc.textBetween(from, to, ' ')
+    setLinkDialog({ selectedText, hasLink: ed.isActive('link') })
+  }, [])
+
+  const applyNoteLink = useCallback((file: string, text: string, label: string) => {
+    const ed = editorRef.current
+    if (!ed) return
+    const href = buildNoteLink(file, text)
+    const { from, to, empty } = ed.state.selection
+    const marks = [{ type: 'link', attrs: { href } }]
+    // 选了字就用选中的字（改过显示文字才替换），没选字就把链接文字插在光标处
+    if (empty || label !== ed.state.doc.textBetween(from, to, ' ')) {
+      const at = empty ? from : { from, to }
+      ed.chain().focus().insertContentAt(at, { type: 'text', text: label, marks }).run()
+    } else {
+      ed.chain().focus().setLink({ href }).run()
+    }
+    setLinkDialog(null)
+  }, [])
+
+  const removeLink = useCallback(() => {
+    editorRef.current?.chain().focus().unsetLink().run()
+    setLinkDialog(null)
+  }, [])
+
   useEffect(() => {
     insertRef.current = insertFiles
   }, [insertFiles])
@@ -225,6 +299,17 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
       ;(window as unknown as Record<string, unknown>).__ed = editor
     }
   }, [editor])
+
+  /** 从别的笔记跳过来：按链接里记的那段文字找到目标，滚过去并闪一下 */
+  useEffect(() => {
+    if (!editor || !jumpTo?.text?.trim()) return
+    const timer = window.setTimeout(() => {
+      if (!flashJump(editor, jumpTo.text.trim())) {
+        noticeRef.current?.('没找到链接指向的那段文字，可能已经改过了，先跳到这篇笔记')
+      }
+    }, 200)
+    return () => window.clearTimeout(timer)
+  }, [editor, jumpTo])
 
   // 桌面端：Tauri 默认走原生拖放，网页拿不到 HTML5 的 drop 事件，
   // 所以再挂一个原生监听，把拖进来的 .html 读出来插成卡片。
@@ -294,6 +379,7 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
             editor={editor}
             onPickImage={() => pickerRef.current?.click()}
             onPickHtml={() => htmlPickerRef.current?.click()}
+            onPickNoteLink={openLinkDialog}
           />
         )}
       </div>
@@ -351,6 +437,17 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
           e.target.value = ''
         }}
       />
+      {linkDialog && (
+        <NoteLinkDialog
+          notes={notesRef.current ?? []}
+          currentFile={currentFile}
+          selectedText={linkDialog.selectedText}
+          hasLink={linkDialog.hasLink}
+          onConfirm={applyNoteLink}
+          onRemove={removeLink}
+          onClose={() => setLinkDialog(null)}
+        />
+      )}
     </div>
   )
 })
@@ -359,10 +456,12 @@ function Toolbar({
   editor,
   onPickImage,
   onPickHtml,
+  onPickNoteLink,
 }: {
   editor: Editor
   onPickImage: () => void
   onPickHtml: () => void
+  onPickNoteLink: () => void
 }) {
   // useEditor 默认每个事务都会重渲染，这里读到的步数是实时的
   const undoSteps = Math.min(undoDepth(editor.state), HISTORY_DEPTH)
@@ -428,6 +527,14 @@ function Toolbar({
         onClick={onPickHtml}
       >
         HTML
+      </button>
+      <button
+        type="button"
+        title="链接到另一篇笔记的某一行（点链接就跳过去并高亮那一行）"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={onPickNoteLink}
+      >
+        🔗 链接
       </button>
       <span className="sep" />
       <button

@@ -3723,3 +3723,114 @@ button {
     min-width: 72px;
   }
 }
+
+/* ---------------- 笔记内链接 ---------------- */
+
+.rich-body a {
+  cursor: pointer;
+}
+.rich-body a:hover {
+  background: var(--accent-soft);
+  border-radius: 3px;
+}
+
+/* 从别的笔记跳过来时，目标段落闪一下 */
+.jj-jump-flash {
+  animation: jj-flash 1.8s ease-out;
+  border-radius: 4px;
+}
+@keyframes jj-flash {
+  0%, 45% { background: #ffe9a8; box-shadow: 0 0 0 5px #ffe9a8; }
+  100% { background: transparent; box-shadow: 0 0 0 5px transparent; }
+}
+
+.notelink-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(30, 27, 22, .34);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.notelink-dialog {
+  width: min(720px, 100%);
+  max-height: min(640px, 88vh);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .22);
+  overflow: hidden;
+}
+.notelink-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 18px 20px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.notelink-head h3 { margin: 0; font-size: 16px; }
+.notelink-head p { margin: 4px 0 0; font-size: 12px; color: var(--sub); }
+.notelink-x {
+  border: 0; background: transparent; font-size: 22px; line-height: 1;
+  color: var(--sub); cursor: pointer; padding: 0 4px;
+}
+.notelink-cols {
+  display: grid; grid-template-columns: 1fr 1.35fr; gap: 12px;
+  padding: 14px 20px; min-height: 0; flex: 1;
+}
+.notelink-col { display: flex; flex-direction: column; min-height: 0; }
+.notelink-col-title { font-size: 12px; color: var(--sub); margin-bottom: 8px; }
+.notelink-search {
+  width: 100%; border: 1px solid var(--line); border-radius: 8px;
+  padding: 7px 10px; font-size: 13px; background: #fff; color: var(--text);
+  font-family: inherit; margin-bottom: 8px;
+}
+.notelink-list {
+  flex: 1; min-height: 160px; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 9px; background: #fff;
+}
+.notelink-item {
+  display: block; width: 100%; text-align: left; border: 0;
+  border-bottom: 1px solid var(--line); background: transparent;
+  padding: 9px 11px; font-size: 13px; color: var(--text);
+  cursor: pointer; font-family: inherit; line-height: 1.5;
+}
+.notelink-item:last-child { border-bottom: 0; }
+.notelink-item:hover { background: var(--panel); }
+.notelink-item.on { background: var(--accent-soft); color: var(--accent); }
+.notelink-item b { display: block; font-weight: 600; }
+.notelink-item small { display: block; color: var(--sub); font-size: 11px; margin-top: 2px; }
+.notelink-line.heading { font-weight: 600; }
+.notelink-tag {
+  display: inline-block; font-size: 10px; color: var(--sub);
+  border: 1px solid var(--line); border-radius: 4px;
+  padding: 0 4px; margin-right: 6px; vertical-align: 1px;
+}
+.notelink-empty { padding: 18px; font-size: 12px; color: var(--sub); text-align: center; }
+.notelink-foot {
+  display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap;
+  padding: 12px 20px 4px; border-top: 1px solid var(--line);
+}
+.notelink-label { flex: 1 1 220px; font-size: 12px; color: var(--sub); }
+.notelink-label input {
+  display: block; width: 100%; margin-top: 5px;
+  border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px;
+  font-size: 13px; background: #fff; color: var(--text); font-family: inherit;
+}
+.notelink-acts { display: flex; gap: 8px; align-items: center; }
+.notelink-acts button {
+  border: 1px solid var(--line); background: #fff; color: var(--text);
+  border-radius: 8px; padding: 8px 14px; font-size: 13px; cursor: pointer; font-family: inherit;
+}
+.notelink-acts button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.notelink-acts button:disabled { opacity: .45; cursor: not-allowed; }
+.notelink-remove { color: var(--sub) !important; }
+.notelink-tip { margin: 4px 20px 16px; font-size: 11px; color: var(--sub); line-height: 1.6; }
+@media (max-width: 620px) {
+  .notelink-cols { grid-template-columns: 1fr; }
+  .notelink-list { max-height: 180px; }
+}

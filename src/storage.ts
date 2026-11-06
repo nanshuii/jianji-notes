@@ -18,6 +18,8 @@ export interface Storage {
   removeAsset(name: string): Promise<void>
   /** 用系统默认程序（浏览器）打开这份网页 */
   openAsset(name: string): Promise<void>
+  /** 用系统默认浏览器打开正文里的普通 http(s) 外链 */
+  openUrl(url: string): Promise<void>
   /** 读用户拖进窗口的外部文件；浏览器里没有绝对路径，所以会抛错 */
   readDroppedFile(path: string): Promise<string>
 }
@@ -75,6 +77,9 @@ const tauriStorage: Storage = {
   },
   async openAsset(name) {
     await tauriInvoke('open_asset', { name })
+  },
+  async openUrl(url) {
+    await tauriInvoke('open_url', { url })
   },
   async readDroppedFile(path) {
     return tauriInvoke<string>('read_external_file', { path })
@@ -197,6 +202,9 @@ const webStorage: Storage = {
     if (typeof html !== 'string') throw new Error('这个网页文件不见了')
     const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }))
     window.open(url, '_blank')
+  },
+  async openUrl(url) {
+    window.open(url, '_blank', 'noopener,noreferrer')
   },
   async readDroppedFile() {
     throw new Error('浏览器预览模式拿不到本地路径，请用「HTML」按钮选文件')

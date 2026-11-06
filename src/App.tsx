@@ -170,6 +170,8 @@ export default function App() {
   const [activeFile, setActiveFile] = useState<string | null>(null)
   /** 编辑器实例的 key：只在真正换一篇笔记时 +1，文件名变了也不重挂载 */
   const [docSeq, setDocSeq] = useState(0)
+  /** 点笔记内链接跳过来时，要在目标笔记里高亮的那段文字 */
+  const [jumpTo, setJumpTo] = useState<{ text: string; token: number } | null>(null)
   const [query, setQuery] = useState('')
   const [ready, setReady] = useState(false)
   const [location, setLocation] = useState('')
@@ -418,6 +420,22 @@ export default function App() {
     },
     [persist],
   )
+
+  /** 点正文里的笔记内链接：切过去，并把「要定位到哪一段」交给新挂载的编辑器 */
+  const jumpToNote = useCallback(
+    (file: string, text: string) => {
+      setJumpTo({ text, token: Date.now() + Math.random() })
+      openNote(file)
+    },
+    [openNote],
+  )
+
+  // 定位完就清掉标记，免得之后从侧栏再进这篇笔记又自动滚过去
+  useEffect(() => {
+    if (!jumpTo) return
+    const t = window.setTimeout(() => setJumpTo(null), 1400)
+    return () => window.clearTimeout(t)
+  }, [jumpTo])
 
   /** 底部轻提示，几秒后自己消失 */
   const flashNotice = useCallback((msg: string) => {
@@ -1402,6 +1420,10 @@ export default function App() {
                   initial={active.body}
                   onChange={(body) => patch({ body })}
                   onNotice={flashNotice}
+                  notes={notes}
+                  currentFile={active.file}
+                  onJumpNote={jumpToNote}
+                  jumpTo={jumpTo}
                 />
               )}
             </section>
