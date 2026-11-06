@@ -29,7 +29,8 @@ pub fn run() {
             delete_asset,
             open_asset,
             open_url,
-            read_external_file
+            read_external_file,
+            read_external_image
         ])
         .run(tauri::generate_context!())
         .expect("启动简记失败");
@@ -426,6 +427,65 @@ fn read_external_file(path: String) -> Result<String, String> {
     fs::read_to_string(&p).map_err(|e| format!("读取文件失败: {e}"))
 }
 
+/// 图片扩展名 → data URI 里的 MIME。只放行常见位图/矢量格式，
+/// 免得把任意二进制（甚至可执行文件）读进来塞进笔记。
+fn image_mime(ext: &str) -> Option<&'static str> {
+    match ext.to_ascii_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "bmp" => Some("image/bmp"),
+        "svg" => Some("image/svg+xml"),
+        "avif" => Some("image/avif"),
+        "heic" | "heif" => Some("image/heic"),
+        "tif" | "tiff" => Some("image/tiff"),
+        "ico" => Some("image/x-icon"),
+        _ => None,
+    }
+}
+
+/// 标准 base64（RFC 4648）。原生拖放只给路径，图片得读成二进制再交给前端，
+/// 自己编码就不必为这一件事多拉一个 crate。
+fn base64_encode(data: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(TABLE[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// 读取从 Finder 拖进窗口的图片，返回可直接塞进 <img src> 的 data URI。
+/// 前端会再按老规矩压到长边 1600 / WebP，所以这里不解码、不重采样。
+#[tauri::command]
+fn read_external_image(path: String) -> Result<String, String> {
+    let p = PathBuf::from(&path);
+    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
+    let mime = image_mime(ext).ok_or_else(|| "只支持拖入常见图片文件".to_string())?;
+    let meta = fs::metadata(&p).map_err(|e| format!("读不到这个文件: {e}"))?;
+    if meta.len() > 25 * 1024 * 1024 {
+        return Err("图片太大了（超过 25MB）".into());
+    }
+    let bytes = fs::read(&p).map_err(|e| format!("读取文件失败: {e}"))?;
+    Ok(format!("data:{mime};base64,{}", base64_encode(&bytes)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -532,6 +592,39 @@ mod tests {
         let txt = dir.join("说明.txt");
         fs::write(&txt, "hi").unwrap();
         assert!(read_external_file(txt.to_string_lossy().to_string()).is_err());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn base64_编码符合标准() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+        assert_eq!(base64_encode(&[0xff, 0x00, 0x10]), "/wAQ");
+    }
+
+    #[test]
+    fn 外部拖入图片返回可直接显示的_data_uri() {
+        let dir = temp_base("dropimg");
+        let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        let f = dir.join("截图.PNG");
+        fs::write(&f, png).unwrap();
+        let uri = read_external_image(f.to_string_lossy().to_string()).unwrap();
+        assert!(uri.starts_with("data:image/png;base64,"));
+        assert_eq!(uri, format!("data:image/png;base64,{}", base64_encode(&png)));
+
+        let svg = dir.join("图.svg");
+        fs::write(&svg, "<svg/>").unwrap();
+        assert!(read_external_image(svg.to_string_lossy().to_string())
+            .unwrap()
+            .starts_with("data:image/svg+xml;base64,"));
+
+        let txt = dir.join("说明.txt");
+        fs::write(&txt, "hi").unwrap();
+        assert!(read_external_image(txt.to_string_lossy().to_string()).is_err());
+        assert!(read_external_image(dir.join("没有.png").to_string_lossy().to_string()).is_err());
         fs::remove_dir_all(&dir).ok();
     }
 }

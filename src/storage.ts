@@ -22,6 +22,8 @@ export interface Storage {
   openUrl(url: string): Promise<void>
   /** 读用户拖进窗口的外部文件；浏览器里没有绝对路径，所以会抛错 */
   readDroppedFile(path: string): Promise<string>
+  /** 读拖进来的图片，返回可直接显示的 data URI（二进制不能走 read_to_string） */
+  readDroppedImage(path: string): Promise<string>
 }
 
 function inTauri(): boolean {
@@ -83,6 +85,9 @@ const tauriStorage: Storage = {
   },
   async readDroppedFile(path) {
     return tauriInvoke<string>('read_external_file', { path })
+  },
+  async readDroppedImage(path) {
+    return tauriInvoke<string>('read_external_image', { path })
   },
 }
 
@@ -208,6 +213,9 @@ const webStorage: Storage = {
   },
   async readDroppedFile() {
     throw new Error('浏览器预览模式拿不到本地路径，请用「HTML」按钮选文件')
+  },
+  async readDroppedImage() {
+    throw new Error('浏览器预览模式拿不到本地路径，请用「图片」按钮选文件')
   },
 }
 

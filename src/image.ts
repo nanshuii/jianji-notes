@@ -10,8 +10,12 @@ export async function fileToDataUrl(file: File, maxSide = 1600): Promise<string>
     reader.readAsDataURL(file)
   })
 
-  // 动图走 canvas 会丢帧，原样内嵌
-  if (!file.type.startsWith('image/') || file.type === 'image/gif') return raw
+  // 动图走 canvas 会丢帧，SVG 是矢量、栅格化会糊且可能丢交互，都原样内嵌。
+  // SVG 的 data URI 必须带 image/svg+xml，否则 <img> 不肯渲染。
+  const isSvg = file.type === 'image/svg+xml' || /\.svg$/i.test(file.name)
+  if (!file.type.startsWith('image/') || file.type === 'image/gif' || isSvg) {
+    return isSvg ? raw.replace(/^data:[^;,]*/, 'data:image/svg+xml') : raw
+  }
 
   try {
     const bitmap = await createImageBitmap(file)

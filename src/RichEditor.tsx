@@ -19,6 +19,7 @@ import { isHtmlFile } from './embed'
 import { getStorage } from './storage'
 import { docToMd, mdToDoc } from './md-doc'
 import { fileToDataUrl } from './image'
+import { classifyPaths, isDroppableFile, pathsToFiles } from './dropped'
 import { ImageToolbar, CropModal } from './ImageToolbar'
 import { NodeSelection, TextSelection } from '@tiptap/pm/state'
 import { undoDepth, redoDepth } from '@tiptap/pm/history'
@@ -57,12 +58,50 @@ type Props = {
   jumpTo?: { text: string; token: number } | null
 }
 
-/** 能插进正文的文件：图片和 .html 网页 */
+/** 能插进正文的文件：图片和 .html 网页（有些系统拖进来的 File 没有 MIME，按扩展名认） */
 function usableFiles(list: FileList | File[] | null | undefined): File[] {
-  return Array.from(list ?? []).filter((f) => f.type.startsWith('image/') || isHtmlFile(f))
+  return Array.from(list ?? []).filter(isDroppableFile)
 }
 
 const ONLY_TIP = '只认图片和 .html 网页文件，其它类型没插进来'
+
+/** 当前文档里的图片数量：插完要数一下，确认编辑器真的收下了 */
+function imageCount(ed: Editor): number {
+  let n = 0
+  ed.state.doc.descendants((node) => {
+    if (node.type.name === 'image') n += 1
+  })
+  return n
+}
+
+/**
+ * 把图片插到鼠标落点（不再是「管光标在哪儿」）。
+ * 图片是行内节点，插进段落中间没问题；万一是原子节点之类的落点，
+ * 退到正文末尾用 setImage 兜底，保证文件不会白拖一趟。
+ */
+function insertImageAt(ed: Editor, src: string, at?: number): boolean {
+  const before = imageCount(ed)
+  const end = ed.state.doc.content.size
+  const sel = ed.state.selection
+  let pos = typeof at === 'number' && Number.isFinite(at) ? at : sel.to
+  if (sel instanceof NodeSelection && typeof at !== 'number') pos = sel.to
+  pos = Math.max(0, Math.min(Math.round(pos), end))
+  const node = { type: 'image', attrs: { src, alt: '' } }
+  ed.chain().insertContentAt(pos, node).scrollIntoView().run()
+  // 只按「文档里到底多没多一张图」判断：chain.run() 会因为 scrollIntoView
+  // 之类的后续命令返回 false，但其实图片已经插进去了，照那个判断会再插一张
+  if (imageCount(ed) === before) {
+    ed.chain().focus('end').setImage({ src, alt: '' }).run()
+  }
+  if (!ed.isFocused) {
+    try {
+      ed.commands.focus()
+    } catch {
+      /* 窗口没聚焦时失败无所谓，图片已经进正文了 */
+    }
+  }
+  return imageCount(ed) > before
+}
 
 /**
  * 把光标送到链接末尾，并清掉「接下来打字要继承的 marks」。
@@ -108,6 +147,8 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
   const [linkDialog, setLinkDialog] = useState<{ selectedText: string; hasLink: boolean } | null>(null)
   /** 上一次 HTML5 拖放的时间：Tauri 的原生拖放和它可能同时到，用它去重 */
   const lastDropAt = useRef(0)
+  /** 反过来也要防：原生事件先到时，紧接着的 HTML5 drop 不能再插一份 */
+  const lastNativeDropAt = useRef(0)
   /** 始终指向当前活着的编辑器：拖放的异步过程里编辑器可能被换掉，别再往旧的里插 */
   const editorRef = useRef<Editor | null>(null)
   // 正在裁剪的图片（同时记住它在文档里的位置，裁剪结果按位置写回）
@@ -170,10 +211,20 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
         return false
       },
       handlePaste(_view, event) {
-        const all = event.clipboardData?.files
+        const dt = event.clipboardData
+        let all = Array.from(dt?.files ?? [])
+        // 系统截图粘贴时，Chrome 有时只把图片放在 items 里、files 是空的。
+        // 只在 files 完全没东西时补，免得复制网页图文时抢走文字粘贴。
+        if (all.length === 0) {
+          for (const item of Array.from(dt?.items ?? [])) {
+            if (item.kind !== 'file') continue
+            const f = item.getAsFile()
+            if (f) all.push(f)
+          }
+        }
         const files = usableFiles(all)
         if (files.length === 0) {
-          if (all?.length) noticeRef.current?.(ONLY_TIP)
+          if (all.length) noticeRef.current?.(ONLY_TIP)
           return false
         }
         event.preventDefault()
@@ -181,6 +232,11 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
         return true
       },
       handleDrop(view, event) {
+        // 桌面端同一次拖放可能既发原生事件又发 HTML5 drop；原生那条已经插过就别再来一份
+        if (Date.now() - lastNativeDropAt.current < 900) {
+          event.preventDefault()
+          return true
+        }
         const dt = (event as DragEvent).dataTransfer
         const dropped = usableFiles(dt?.files)
         if (dropped.length === 0) {
@@ -227,6 +283,8 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
       }
       busy.current = true
       try {
+        // 一次拖多份时按拖进来的顺序落位：插完一份，下一份落在刚插入内容的后面
+        let cursor = at
         for (const file of list) {
           const ed = live()
           if (!ed || ed.isDestroyed) return
@@ -236,11 +294,14 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
               noticeRef.current?.(`「${file.name}」是空的，没插进来`)
               continue
             }
-            await insertHtmlEmbed(ed, html, file.name, at)
+            await insertHtmlEmbed(ed, html, file.name, cursor)
           } else {
             const src = await fileToDataUrl(file)
-            ed.chain().focus().setImage({ src, alt: '' }).run()
+            if (!insertImageAt(ed, src, cursor)) {
+              noticeRef.current?.(`「${file.name}」没能插进正文`)
+            }
           }
+          cursor = ed.state.selection.to
         }
       } catch (e) {
         noticeRef.current?.(`插入失败：${String((e as Error)?.message ?? e)}`)
@@ -343,7 +404,8 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
   }, [editor, jumpTo])
 
   // 桌面端：Tauri 默认走原生拖放，网页拿不到 HTML5 的 drop 事件，
-  // 所以再挂一个原生监听，把拖进来的 .html 读出来插成卡片。
+  // 所以再挂一个原生监听，把拖进来的图片 / .html 路径读成 File，
+  // 交给和「图片按钮 / ⌘V / 网页内拖放」共用的那条插入流程。
   useEffect(() => {
     if (!editor || !('__TAURI_INTERNALS__' in window)) return
     let dead = false
@@ -356,29 +418,29 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
           if (p.type !== 'drop') return
           // HTML5 那条已经处理过就别重复插
           if (Date.now() - lastDropAt.current < 900) return
-          const pages = (p.paths ?? []).filter((path) => /\.(html?|xhtml)$/i.test(path))
-          if (pages.length === 0) return
+          const paths = (p.paths ?? []).filter((x): x is string => typeof x === 'string' && !!x)
+          const groups = classifyPaths(paths)
+          if (!groups.pages.length && !groups.images.length) {
+            if (paths.length) noticeRef.current?.(ONLY_TIP)
+            return
+          }
+          lastNativeDropAt.current = Date.now()
+          // Tauri 给的是物理像素，posAtCoords 要 CSS 像素
           const dpr = window.devicePixelRatio || 1
-          const at = editor.view.posAtCoords({
-            left: p.position.x / dpr,
-            top: p.position.y / dpr,
-          })?.pos
+          const xy = { left: p.position.x / dpr, top: p.position.y / dpr }
           void (async () => {
-            for (const path of pages) {
-              const name = path.split(/[\\/]/).pop() || '网页'
-              try {
-                const html = await getStorage().readDroppedFile(path)
-                // 读文件的这几毫秒里笔记可能被切走、编辑器被换掉，那就不往旧的里插
-                const live = editorRef.current
-                if (!live || live.isDestroyed) {
-                  noticeRef.current?.('正在切换笔记，这张网页先不插了')
-                  continue
-                }
-                await insertHtmlEmbed(live, html, name, at)
-              } catch (e) {
-                noticeRef.current?.(`没法插「${name}」：${String((e as Error)?.message ?? e)}`)
-              }
+            const files = await pathsToFiles(paths, getStorage(), (name, e) => {
+              noticeRef.current?.(`没法插「${name}」：${String((e as Error)?.message ?? e)}`)
+            })
+            if (files.length === 0) return
+            // 读文件的这几毫秒里笔记可能被切走、编辑器被换掉，那就不往旧的里插
+            const live = editorRef.current
+            if (!live || live.isDestroyed) {
+              noticeRef.current?.('正在切换笔记，这批文件先不插了')
+              return
             }
+            const at = live.view.posAtCoords(xy)?.pos
+            await insertRef.current(files, at)
           })()
         })
         if (dead) un()
@@ -545,7 +607,7 @@ function Toolbar({
       <span className="sep" />
       <button
         type="button"
-        title="插入图片（也可以直接 ⌘V 粘贴或拖进来）"
+        title="插入图片（Finder 或网页里的图片可以直接拖进来，截图也可以 ⌘V 粘贴）"
         onMouseDown={(e) => e.preventDefault()}
         onClick={onPickImage}
       >
