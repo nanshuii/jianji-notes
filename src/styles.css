@@ -3724,6 +3724,109 @@ button {
   }
 }
 
+/* ---------------- 融入正文的网页（inline 模式） ----------------
+   网页整篇铺在笔记里：没有外框、没有标题栏、没有内部滚动条，
+   高度跟着内容长，脚本/动画/图表/锚点全部照常跑。 */
+
+.html-card.inline {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  /* sticky 的小工具条要能浮在网页上面 */
+  overflow: visible;
+}
+.html-card.inline:hover,
+.html-card.inline.selected {
+  border-color: transparent;
+  box-shadow: none;
+}
+.html-card.inline .html-card-body {
+  background: transparent;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.html-card.inline .html-frame {
+  min-width: 0;
+  background: transparent;
+}
+.html-card.inline .html-card-loading,
+.html-card.inline .html-card-err {
+  min-height: 90px;
+}
+
+/* 工具条不占正文高度，滚到网页中段也还在右上角；平时很淡，移上去才清晰 */
+.html-inline-tools {
+  position: sticky;
+  top: 6px;
+  z-index: 6;
+  height: 0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-start;
+  gap: 3px;
+  padding-right: 6px;
+  opacity: 0.16;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+.html-card.inline:hover .html-inline-tools,
+.html-card.inline.selected .html-inline-tools {
+  opacity: 1;
+  pointer-events: auto;
+}
+.html-inline-tools > * {
+  pointer-events: auto;
+}
+.html-inline-tools .html-act,
+.html-inline-mode,
+.html-inline-title,
+.html-inline-name {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 2px 8px rgba(60, 50, 40, 0.1);
+  backdrop-filter: blur(6px);
+  font-family: inherit;
+  color: var(--text);
+}
+.html-inline-tools .html-act {
+  flex: none;
+}
+.html-inline-title {
+  max-width: 180px;
+  padding: 3px 8px;
+  font-size: 11.5px;
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--sub);
+  cursor: text;
+  user-select: none;
+}
+.html-inline-name {
+  width: 150px;
+  padding: 3px 8px;
+  font-size: 11.5px;
+  line-height: 16px;
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.html-inline-mode {
+  flex: none;
+  padding: 3px 8px;
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.html-inline-mode:hover {
+  border-color: var(--accent);
+  background: #fff;
+  color: var(--accent);
+}
+
 /* ---------------- 笔记内链接 ---------------- */
 
 .rich-body a {

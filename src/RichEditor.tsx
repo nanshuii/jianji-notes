@@ -20,7 +20,7 @@ import { getStorage } from './storage'
 import { docToMd, mdToDoc } from './md-doc'
 import { fileToDataUrl } from './image'
 import { ImageToolbar, CropModal } from './ImageToolbar'
-import { NodeSelection } from '@tiptap/pm/state'
+import { NodeSelection, TextSelection } from '@tiptap/pm/state'
 import { undoDepth, redoDepth } from '@tiptap/pm/history'
 import { buildNoteLink, parseNoteLink, isExternalUrl } from './notelink'
 import { JumpHighlight, flashJump } from './jumpHighlight'
@@ -64,6 +64,26 @@ function usableFiles(list: FileList | File[] | null | undefined): File[] {
 
 const ONLY_TIP = '只认图片和 .html 网页文件，其它类型没插进来'
 
+/**
+ * 把光标送到链接末尾，并清掉「接下来打字要继承的 marks」。
+ *
+ * ProseMirror 会在光标上记一份 storedMarks；插入链接时它往往还带着 link，
+ * 结果接着打的每个字都变成链接，用户只能先换行绕开。显式置空后，
+ * 已有链接文字不受影响，新打的字就是普通正文。
+ */
+function exitLink(editor: Editor) {
+  const { state, view } = editor
+  const pos = Math.max(0, Math.min(state.selection.to, state.doc.content.size))
+  const sel = TextSelection.near(state.doc.resolve(pos), 1)
+  view.dispatch(
+    state.tr
+      .setSelection(sel)
+      .setStoredMarks([])
+      // 只动选区，不该占掉一步撤回，也不该触发保存
+      .setMeta('addToHistory', false),
+  )
+}
+
 export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEditor(
   { initial, onChange, onNotice, onReady, notes, currentFile, onJumpNote, jumpTo },
   ref,
@@ -104,7 +124,13 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
       // 笔记内链接用 jianji: 自定义 scheme。Link 默认只放行 http/mailto 等，
       // 不注册的话 setLink 会直接拒绝，renderHTML 还会把 href 清空。
       // 只额外放行 jianji: 一种，javascript: 之类仍然拦着。
-      Link.configure({ openOnClick: false, autolink: true, protocols: ['jianji'] }),
+      // inclusive 默认跟着 autolink 变成 true：光标停在链接末尾继续打字会把新字
+      // 也吞进链接里，用户只能先换行。这里显式关掉，链接就只覆盖它自己的文字。
+      Link.extend({ inclusive: false }).configure({
+        openOnClick: false,
+        autolink: true,
+        protocols: ['jianji'],
+      }),
       // 行内节点（能挂在段落里，图片可以混在文字中间）；
       // 靠 CSS 浮动实现「图片靠左/靠右，文字绕排成多行」
       ResizableImage.configure({ allowBase64: true, inline: true }),
@@ -250,11 +276,16 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
     } else {
       ed.chain().focus().setLink({ href }).run()
     }
+    // 关键：别让链接 mark 粘到光标上，否则接下来打的字全是链接
+    exitLink(ed)
     setLinkDialog(null)
   }, [])
 
   const removeLink = useCallback(() => {
-    editorRef.current?.chain().focus().unsetLink().run()
+    const ed = editorRef.current
+    if (!ed) return
+    ed.chain().focus().unsetLink().run()
+    exitLink(ed)
     setLinkDialog(null)
   }, [])
 

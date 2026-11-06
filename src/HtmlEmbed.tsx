@@ -1,9 +1,10 @@
 /**
- * 笔记里的「网页卡片」：把一份 .html 直接嵌进正文里显示。
+ * 笔记里的网页：把一份 .html 直接嵌进正文里显示。
  *
- * - 拖进来 / 粘贴 / 点工具栏「HTML」选文件都会生成一张卡片
- * - 卡片里是真的网页（iframe），可以滚、可以点、能跑脚本
- * - 高度可以拖着调，能全屏看，也能一键丢到浏览器里打开
+ * - 拖进来 / 粘贴 / 点工具栏「HTML」选文件都能插入
+ * - 默认「融入正文」：无外框、高度跟着内容长、整篇随笔记一起滚，前后照常写字
+ * - 随时可以切回「卡片」：固定高度、可拖可调、可缩放；旧笔记默认按卡片打开
+ * - 两种模式里都是真的网页（iframe），脚本、按钮、图表、锚点照常能用
  * - 正文里只留一行元信息，网页文件存在 笔记目录/.assets/
  */
 import { Node, mergeAttributes } from '@tiptap/core'
@@ -15,16 +16,20 @@ import { createPortal } from 'react-dom'
 import { getStorage } from './storage'
 import {
   DEFAULT_HEIGHT,
+  DEFAULT_MODE,
   DEFAULT_ZOOM,
+  INSERT_MODE,
   MAX_HEIGHT,
   MAX_ZOOM,
   MIN_HEIGHT,
   MIN_ZOOM,
   ZOOM_STEP,
   clampZoom,
+  embedMode,
   humanSize,
   makeAssetName,
   titleOf,
+  type EmbedMode,
 } from './embed'
 
 /**
@@ -34,15 +39,25 @@ import {
 const SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals'
 
 /**
+ * 融入正文的网页会整篇铺开，给个上限防止异常页面（比如带 100vh 元素）把笔记撑到无限高。
+ * 到顶之后还是能全屏/用浏览器打开看完整内容。
+ */
+const INLINE_MAX_HEIGHT = 24000
+
+/**
  * srcDoc iframe 的 base URL 继承自父文档，页面里的 href="#id" 会被解析成「父页面 URL + #id」。
  * 点一下等于让 iframe 导航到父页面：卡片内容整块白掉，甚至套一层应用首页。
- * 这里在 iframe 文档上用捕获阶段拦下锚点点击，改成卡片内部滚动，用户的 HTML 一个字不改。
+ * 这里在 iframe 文档上用捕获阶段拦下锚点点击，改成滚动，用户的 HTML 一个字不改。
+ * - 卡片模式：滚 iframe 内部
+ * - 融入模式：iframe 已经跟内容一样高、内部滚不动，改成滚笔记正文
  * WeakMap 按文档去重（刷新后是新文档，会自然重新注入），文档销毁时监听随之回收。
  */
 const anchorCleanups = new WeakMap<Document, () => void>()
-function attachAnchors(frame: HTMLIFrameElement) {
+function attachAnchors(frame: HTMLIFrameElement, inline = false) {
   const doc = frame.contentDocument
-  if (!doc || anchorCleanups.has(doc)) return
+  if (!doc) return
+  // 切换呈现模式时 iframe 不会重载，先把旧监听摘掉再按新模式挂
+  anchorCleanups.get(doc)?.()
   const onClick = (ev: MouseEvent) => {
     // 普通左键才接管；⌘/Ctrl/Shift 点击、页面自己已处理过的都放行
     if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return
@@ -53,12 +68,30 @@ function attachAnchors(frame: HTMLIFrameElement) {
     try { id = decodeURIComponent(id) } catch { /* 编码不合法就按原值找 */ }
     // 目标找不到也要拦：放过去同样会把 iframe 导航出去
     ev.preventDefault()
-    if (!id) { doc.defaultView?.scrollTo({ top: 0 }); return }
+    if (!id) {
+      if (inline) scrollOuter(frame, frame.getBoundingClientRect().top - 24)
+      else doc.defaultView?.scrollTo({ top: 0 })
+      return
+    }
     const target = doc.getElementById(id) ?? doc.querySelector(`[name="${CSS.escape(id)}"]`)
-    target?.scrollIntoView({ block: 'start' })
+    if (!target) return
+    if (inline) {
+      // target 在 iframe 里的位置 + iframe 在页面里的位置 = 要滚多少
+      const top = frame.getBoundingClientRect().top + target.getBoundingClientRect().top
+      scrollOuter(frame, top - 24)
+    } else {
+      target.scrollIntoView({ block: 'start' })
+    }
   }
   doc.addEventListener('click', onClick, true)
   anchorCleanups.set(doc, () => doc.removeEventListener('click', onClick, true))
+}
+
+/** 融入模式下锚点要滚的是笔记的滚动容器（不是 iframe 内部） */
+function scrollOuter(frame: HTMLIFrameElement, top: number) {
+  const outer = outerScroller(frame.parentElement)
+  if (outer) outer.scrollBy({ top, behavior: 'smooth' })
+  else window.scrollBy({ top, behavior: 'smooth' })
 }
 
 /**
@@ -103,6 +136,11 @@ export const HtmlEmbed = Node.create({
         parseHTML: (el: HTMLElement) => clampZoom(el.getAttribute('data-zoom')),
         renderHTML: (attrs: Record<string, unknown>) => ({ 'data-zoom': attrs.zoom }),
       },
+      mode: {
+        default: DEFAULT_MODE,
+        parseHTML: (el: HTMLElement) => embedMode(el.getAttribute('data-mode')),
+        renderHTML: (attrs: Record<string, unknown>) => ({ 'data-mode': attrs.mode }),
+      },
     }
   },
   parseHTML() {
@@ -137,9 +175,16 @@ export async function insertHtmlEmbed(
   html: string,
   fileName: string,
   at?: number,
-): Promise<{ file: string; title: string; height: number }> {
+): Promise<{ file: string; title: string; height: number; mode: EmbedMode }> {
   const file = await getStorage().saveAsset(makeAssetName(), html)
-  const attrs = { file, title: titleOf(fileName), height: DEFAULT_HEIGHT, zoom: DEFAULT_ZOOM }
+  // 新插入的网页默认「融入正文」：不再是一个带外框的小卡片
+  const attrs = {
+    file,
+    title: titleOf(fileName),
+    height: DEFAULT_HEIGHT,
+    zoom: DEFAULT_ZOOM,
+    mode: INSERT_MODE,
+  }
   // 后面补一个空段落：不然卡片落在正文末尾时，光标没地方落脚没法接着写
   const nodes = [{ type: 'htmlEmbed', attrs }, { type: 'paragraph' }]
   const before = embedCount(editor)
@@ -189,11 +234,15 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
   )
   // 内容缩放：正文只有五百多像素时，按比例缩放的页面（流程图、看板）字会小到看不清
   const zoom = clampZoom(node.attrs.zoom)
+  /** 融入正文：网页整篇铺在笔记里，没有卡片外框，高度跟着内容长 */
+  const inline = embedMode(node.attrs.mode) === 'inline'
 
   const [html, setHtml] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [tick, setTick] = useState(0)
   const [liveH, setLiveH] = useState(height)
+  /** 融入模式下量出来的内容高度；0 = 还没量到，先用笔记里记的高度 */
+  const [autoH, setAutoH] = useState(0)
   /** 屏幕上真正的高度 = 基准高度 × 缩放倍数 */
   const shownH = Math.max(MIN_HEIGHT, Math.round(liveH * zoom))
   const [full, setFull] = useState(false)
@@ -317,6 +366,132 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
   const FIT_MAX = 900
   const fitRef = useRef('')
   const frameRef = useRef<HTMLIFrameElement | null>(null)
+  /** 记住上一次的呈现模式：只有在「融入 → 卡片」这一刻才需要收高度 */
+  const wasInline = useRef(inline)
+  /** 同页可能有多张网页，用 id 区分是谁报上来的高度 */
+  const heightId = useRef(`jjh-${Math.random().toString(36).slice(2, 10)}`)
+
+  /**
+   * 融入正文：让 iframe 自己量内容高度，用 postMessage 报给笔记页面。
+   * 量的是「子元素底部」而不是 body.scrollHeight —— 后者在 iframe 里至少等于
+   * 视口高度，iframe 一撑高它跟着涨，会陷入越量越高的循环。
+   * 页面里的折叠、Tab、图表动画改了高度，ResizeObserver 会继续报，笔记跟着长。
+   */
+  useEffect(() => {
+    if (!inline) return
+    const onMsg = (e: MessageEvent) => {
+      const d = e.data as { __jianjiHeightId?: string; height?: number } | null
+      if (!d || d.__jianjiHeightId !== heightId.current) return
+      if (frameRef.current && e.source !== frameRef.current.contentWindow) return
+      const h = Number(d.height)
+      if (!Number.isFinite(h) || h <= 0) return
+      const next = Math.max(60, Math.min(INLINE_MAX_HEIGHT, Math.ceil(h)))
+      setAutoH((prev) => (Math.abs(prev - next) <= 2 ? prev : next))
+    }
+    window.addEventListener('message', onMsg)
+    return () => window.removeEventListener('message', onMsg)
+  }, [inline])
+
+  const attachAutoHeight = (frame: HTMLIFrameElement) => {
+    const doc = frame.contentDocument
+    const win = doc?.defaultView
+    if (!doc?.body || !win) return
+    if ((win as unknown as Record<string, unknown>).__jianjiAutoHeightDoc === doc) {
+      // 同一份网页已经装过：切过模式时手动催一次，父页面这边的监听刚重新挂上
+      const measure = (win as unknown as Record<string, () => void>).__jianjiMeasure
+      measure?.()
+      return
+    }
+    const script = doc.createElement('script')
+    script.textContent = `(function () {
+  var W = window;
+  // srcDoc 装载会换掉 document 但 window 可能复用：标记必须挂在「这份文档」上，
+  // 否则 ResizeObserver 会一直盯着已经被丢弃的旧 body，网页长高时不再报数
+  if (W.__jianjiAutoHeightDoc === document) return;
+  W.__jianjiAutoHeightDoc = document;
+  var ID = ${JSON.stringify(heightId.current)};
+  function measure() {
+    var b = document.body;
+    if (!b) return;
+    var h = 0, kids = b.children;
+    for (var i = 0; i < kids.length; i++) {
+      var el = kids[i], st = W.getComputedStyle(el);
+      if (!st || st.display === 'none' || st.position === 'fixed') continue;
+      var r = el.getBoundingClientRect();
+      if (r.height > 0 || r.bottom > 0) h = Math.max(h, r.bottom + (W.scrollY || 0));
+    }
+    if (kids.length === 0 || h < 20) h = Math.max(h, b.scrollHeight);
+    var pad = parseFloat(W.getComputedStyle(b).paddingBottom) || 0;
+    h = Math.ceil(h + pad + 2);
+    try { W.parent.postMessage({ __jianjiHeightId: ID, height: h }, '*'); } catch (e) {}
+  }
+  W.__jianjiMeasure = measure;
+  if (W.ResizeObserver) {
+    var ro = new W.ResizeObserver(measure);
+    ro.observe(document.body);
+    for (var j = 0; j < document.body.children.length; j++) ro.observe(document.body.children[j]);
+  }
+  W.addEventListener('resize', measure);
+  W.addEventListener('load', measure);
+  setTimeout(measure, 60);
+  setTimeout(measure, 400);
+  setTimeout(measure, 1400);
+  measure();
+})();`
+    try {
+      doc.body.appendChild(script)
+    } catch {
+      /* 页面自己设了 CSP 不让注入脚本，就退回固定高度，不影响显示 */
+    }
+  }
+
+  /**
+   * 从融入模式切回卡片：融入时整篇网页可能上万像素高，卡片要收回上限，
+   * 否则一张卡片就顶满整屏。只在切换那一刻动，老卡片首次打开不受影响。
+   */
+  useEffect(() => {
+    const prev = wasInline.current
+    wasInline.current = inline
+    if (!prev || inline) return
+    const h = Math.max(MIN_HEIGHT, Math.min(FIT_MAX, Math.round(autoH || liveH)))
+    fitRef.current = file
+    setLiveH(h)
+    updateAttributes({ height: h })
+    // 只在模式切换时跑一次，别把用户之后拖的高度改掉
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inline, file])
+
+  /**
+   * 模式一变就按新模式重挂网页里的监听（锚点 / 滚轮 / 自动高度）。
+   * 走按钮切、走编辑器命令改 attrs、从 Markdown 读进来，都一样生效。
+   */
+  useEffect(() => {
+    const f = frameRef.current
+    if (!f || html === null) return
+    attachAnchors(f, inline)
+    if (inline) {
+      wheelOff.current?.()
+      wheelOff.current = null
+      attachAutoHeight(f)
+    } else {
+      attachWheel(f)
+    }
+    // html/文件/重新载入都会换掉 iframe 文档，监听要跟着重挂
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inline, html, file, tick])
+
+  /** 卡片 ⇄ 融入正文：可以随时来回切，网页文件本身不动 */
+  const switchMode = (next: EmbedMode) => {
+    if (next === 'inline') {
+      setAutoH(0)
+      updateAttributes({ mode: 'inline' })
+    } else {
+      updateAttributes({
+        mode: 'card',
+        height: Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, Math.round(autoH || height))),
+      })
+    }
+  }
 
   /** 按内容把高度贴上去（只在还没人动过高度时调用） */
   const fitToContent = () => {
@@ -335,6 +510,13 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
   }
 
   const onFrameLoad = (e: React.SyntheticEvent<HTMLIFrameElement>) => {
+    // 融入模式：不接管滚轮（网页本身没有内部滚动，滚轮自然交给笔记），
+    // 也不做「贴一次高度」，全程由 iframe 里的 ResizeObserver 持续报高度
+    if (inline) {
+      attachAnchors(e.currentTarget, true)
+      attachAutoHeight(e.currentTarget)
+      return
+    }
     attachWheel(e.currentTarget)
     attachAnchors(e.currentTarget)
     // 已经贴合过就别反复动——用户之后拖的高度不能被重新载入冲掉
@@ -359,9 +541,9 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
       // 缩放靠「把 iframe 的 CSS 宽度按倍数放大」实现：页面里的 width:100% 会跟着铺开，
       // 内容整体变大，卡片内横向滚动；直接把内容 scale 会把布局一起缩回去，没用
       style={{
-        height: shownH,
-        width: `${Math.round(zoom * 100)}%`,
-        minWidth: zoom >= DEFAULT_ZOOM ? 380 : 0,
+        height: inline ? autoH || Math.min(height, 320) : shownH,
+        width: inline ? '100%' : `${Math.round(zoom * 100)}%`,
+        minWidth: inline ? 0 : zoom >= DEFAULT_ZOOM ? 380 : 0,
       }}
       onLoad={onFrameLoad}
     />
@@ -369,7 +551,7 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
 
   return (
     <NodeViewWrapper
-      className={`html-card${selected ? ' selected' : ''}${error ? ' broken' : ''}`}
+      className={`html-card${inline ? ' inline' : ''}${selected ? ' selected' : ''}${error ? ' broken' : ''}`}
       contentEditable={false}
       ref={cardRef}
       onClick={(e: React.MouseEvent) => {
@@ -381,7 +563,54 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
         editor.commands.setNodeSelection(pos)
       }}
     >
-      <div className="html-card-head" data-drag-handle title="按住拖动可挪位置">
+      {/* 融入正文：平时只有一个很淡的小工具条，鼠标移上去才清晰，不占正文高度 */}
+      {inline && (
+        <div
+          className="html-inline-tools"
+          contentEditable={false}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {renaming ? (
+            <input
+              ref={nameRef}
+              className="html-inline-name"
+              value={draft}
+              spellCheck={false}
+              onChange={(e) => setDraft(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={(e) => {
+                e.stopPropagation()
+                if (e.key === 'Enter') { e.preventDefault(); commitRename() }
+                else if (e.key === 'Escape') { e.preventDefault(); setRenaming(false) }
+              }}
+            />
+          ) : (
+            <span
+              className="html-inline-title"
+              title="双击改名字"
+              onDoubleClick={(e) => { e.stopPropagation(); startRename() }}
+            >
+              {title}
+            </span>
+          )}
+          <button
+            type="button"
+            className="html-inline-mode"
+            title="切回卡片模式：固定高度、可缩放"
+            onClick={() => switchMode('card')}
+          >
+            ▣ 卡片
+          </button>
+          <button type="button" className="html-act" title="重新载入（文件被改过时用）" onClick={() => setTick((v) => v + 1)}>↻</button>
+          <button type="button" className="html-act" title="全屏看" onClick={() => setFull(true)}>⛶</button>
+          <button type="button" className="html-act" title="用浏览器打开原文件" onClick={() => void openInBrowser()}>↗</button>
+          <button type="button" className="html-act del" title="从笔记里移除（不会删掉 .assets 里的文件）" onClick={() => deleteNode()}>×</button>
+        </div>
+      )}
+
+      {!inline && (
+        <div className="html-card-head" data-drag-handle title="按住拖动可挪位置">
         <span className="html-card-icon">{'</>'}</span>
         {renaming ? (
           <input
@@ -457,6 +686,17 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
         <span className="html-card-acts">
           <button
             type="button"
+            className="html-inline-mode"
+            title="融入正文：去掉卡片外框，网页整篇跟着笔记一起排（特效照常可用）"
+            onClick={(e) => {
+              e.stopPropagation()
+              switchMode('inline')
+            }}
+          >
+            ⤢ 融入
+          </button>
+          <button
+            type="button"
             className="html-act"
             title="重新载入（文件被改过时用）"
             onClick={(e) => {
@@ -500,7 +740,8 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
             ×
           </button>
         </span>
-      </div>
+        </div>
+      )}
 
       <div className="html-card-body">
         {error ? (
@@ -519,14 +760,18 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
         )}
       </div>
 
-      <span
-        className="html-resize"
-        title="拖动调整高度"
-        // 用捕获阶段：先于编辑器的 mousedown 拿到事件，否则 ProseMirror 会把这次拖动
-        // 当成「拖动整个卡片」，页面收不到 mousemove，高度就拖不动
-        onMouseDownCapture={(e) => startResize(e)}
-      />
-      <span className="html-drag-hint">网页 · 拖底部可调高度</span>
+      {!inline && (
+        <>
+          <span
+            className="html-resize"
+            title="拖动调整高度"
+            // 用捕获阶段：先于编辑器的 mousedown 拿到事件，否则 ProseMirror 会把这次拖动
+            // 当成「拖动整个卡片」，页面收不到 mousemove，高度就拖不动
+            onMouseDownCapture={(e) => startResize(e)}
+          />
+          <span className="html-drag-hint">网页 · 拖底部可调高度</span>
+        </>
+      )}
 
       {resizing && createPortal(<div className="html-resize-mask" />, document.body)}
 

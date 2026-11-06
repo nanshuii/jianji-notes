@@ -5,7 +5,7 @@
  * 但界面上不再显示 Markdown 源码：打开是排好版的正文，输入什么就长成什么样。
  */
 
-import { DEFAULT_HEIGHT, EMBED_LANG, embedMetaJson, parseEmbedMeta } from './embed'
+import { DEFAULT_HEIGHT, EMBED_LANG, embedMetaJson, embedMode, parseEmbedMeta } from './embed'
 
 export type Mark = { type: string; attrs?: Record<string, unknown> }
 
@@ -361,6 +361,7 @@ function blockToMd(node: PMNode, depth = 0): string {
         title: String(node.attrs?.title ?? ''),
         height: Number.isFinite(h) ? h : DEFAULT_HEIGHT,
         zoom: Number(node.attrs?.zoom) || 1,
+        mode: embedMode(node.attrs?.mode),
       })}\n\`\`\``
     }
     case 'bulletList':

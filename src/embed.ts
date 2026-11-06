@@ -21,6 +21,21 @@ export const MIN_ZOOM = 0.5
 export const MAX_ZOOM = 2.5
 export const ZOOM_STEP = 0.25
 
+/**
+ * 网页在笔记里的两种呈现：
+ * - card   ：老样子，一张有边框/标题栏/固定高度的卡片（旧笔记缺省就是它）
+ * - inline ：融入正文 —— 没有卡片外框，高度跟着网页内容长，整篇随笔记一起滚，
+ *            网页里的脚本、动画、图表、锚点全部照常跑。新插入默认用这个。
+ */
+export type EmbedMode = 'card' | 'inline'
+export const DEFAULT_MODE: EmbedMode = 'card'
+export const INSERT_MODE: EmbedMode = 'inline'
+
+/** 只认 inline，其它一律当 card（旧笔记里没有这个字段） */
+export function embedMode(v: unknown): EmbedMode {
+  return v === 'inline' ? 'inline' : 'card'
+}
+
 export type EmbedMeta = {
   /** .assets 里的文件名 */
   file: string
@@ -30,6 +45,8 @@ export type EmbedMeta = {
   height: number
   /** 内容缩放倍数，1 = 按卡片宽度铺满 */
   zoom?: number
+  /** card（缺省）= 卡片；inline = 融入正文、自动贴合内容高度 */
+  mode?: EmbedMode
 }
 
 /** 把任意输入夹到合法的缩放范围里，缺省/非法都当 1 */
@@ -81,21 +98,21 @@ export function parseEmbedMeta(raw: string): EmbedMeta | null {
       ? Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, Math.round(h)))
       : DEFAULT_HEIGHT
     const zoom = clampZoom(o.zoom)
-    return { file, title, height, zoom }
+    return { file, title, height, zoom, mode: embedMode(o.mode) }
   } catch {
     return null
   }
 }
 
-/** 元信息 → 一行 JSON（写进 Markdown 的围栏里）；zoom=1 就不写，保持老格式干净 */
+/** 元信息 → 一行 JSON（写进 Markdown 的围栏里）；默认值不写，保持老格式干净 */
 export function embedMetaJson(m: EmbedMeta): string {
   const height = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, Math.round(m.height || DEFAULT_HEIGHT)))
   const zoom = clampZoom(m.zoom)
-  return JSON.stringify(
-    zoom === DEFAULT_ZOOM
-      ? { file: m.file, title: m.title ?? '', height }
-      : { file: m.file, title: m.title ?? '', height, zoom },
-  )
+  const mode = embedMode(m.mode)
+  const out: Record<string, unknown> = { file: m.file, title: m.title ?? '', height }
+  if (zoom !== DEFAULT_ZOOM) out.zoom = zoom
+  if (mode !== DEFAULT_MODE) out.mode = mode
+  return JSON.stringify(out)
 }
 
 /** 12.3 KB / 1.4 MB */
