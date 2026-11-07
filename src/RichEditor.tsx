@@ -15,7 +15,10 @@ import TaskItem from '@tiptap/extension-task-item'
 import Placeholder from '@tiptap/extension-placeholder'
 import { ResizableImage } from './ResizableImage'
 import { HtmlEmbed, insertHtmlEmbed } from './HtmlEmbed'
+import { MdEmbed, insertMdEmbed } from './MdEmbed'
+import { MdTable } from './mdtable'
 import { isHtmlFile } from './embed'
+import { isMdFile } from './mdmeta'
 import { getStorage } from './storage'
 import { docToMd, mdToDoc } from './md-doc'
 import { fileToDataUrl } from './image'
@@ -35,7 +38,7 @@ export type RichEditorHandle = {
   insertFiles: (files: FileList | File[] | null | undefined) => Promise<void>
   /** 弹出系统选图框（顶栏「图片」按钮用） */
   pickImage: () => void
-  /** 弹出系统选框，挑 .html 网页（顶栏「HTML」按钮用） */
+  /** 弹出系统选框，挑 .html 网页或 .md 文档（顶栏「HTML·MD」按钮用） */
   pickHtml: () => void
   focus: () => void
 }
@@ -63,7 +66,7 @@ function usableFiles(list: FileList | File[] | null | undefined): File[] {
   return Array.from(list ?? []).filter(isDroppableFile)
 }
 
-const ONLY_TIP = '只认图片和 .html 网页文件，其它类型没插进来'
+const ONLY_TIP = '只认图片、.html 网页和 .md 文档，其它类型没插进来'
 
 /** 当前文档里的图片数量：插完要数一下，确认编辑器真的收下了 */
 function imageCount(ed: Editor): number {
@@ -177,6 +180,8 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
       ResizableImage.configure({ allowBase64: true, inline: true }),
       // 网页卡片：.html 直接嵌在正文里显示
       HtmlEmbed,
+      MdEmbed,
+      MdTable,
       TaskList,
       TaskItem.configure({ nested: true }),
       JumpHighlight,
@@ -295,6 +300,13 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
               continue
             }
             await insertHtmlEmbed(ed, html, file.name, cursor)
+          } else if (isMdFile(file)) {
+            const md = await file.text()
+            if (!md.trim()) {
+              noticeRef.current?.(`「${file.name}」是空的，没插进来`)
+              continue
+            }
+            await insertMdEmbed(ed, md, file.name, cursor)
           } else {
             const src = await fileToDataUrl(file)
             if (!insertImageAt(ed, src, cursor)) {
@@ -420,7 +432,7 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
           if (Date.now() - lastDropAt.current < 900) return
           const paths = (p.paths ?? []).filter((x): x is string => typeof x === 'string' && !!x)
           const groups = classifyPaths(paths)
-          if (!groups.pages.length && !groups.images.length) {
+          if (!groups.pages.length && !groups.images.length && !groups.docs.length) {
             if (paths.length) noticeRef.current?.(ONLY_TIP)
             return
           }
@@ -522,7 +534,7 @@ export const RichEditor = forwardRef<RichEditorHandle, Props>(function RichEdito
         ref={htmlPickerRef}
         className="html-picker"
         type="file"
-        accept=".html,.htm,.xhtml,text/html"
+        accept=".html,.htm,.xhtml,.md,.markdown,text/html,text/markdown"
         multiple
         hidden
         onChange={(e) => {
@@ -615,11 +627,11 @@ function Toolbar({
       </button>
       <button
         type="button"
-        title="插入 HTML 网页（WorkBuddy 生成的页面可以直接拖进来）"
+        title="插入 HTML 网页或 .md 文档（WorkBuddy 生成的文件可以直接拖进来）"
         onMouseDown={(e) => e.preventDefault()}
         onClick={onPickHtml}
       >
-        HTML
+        HTML·MD
       </button>
       <button
         type="button"

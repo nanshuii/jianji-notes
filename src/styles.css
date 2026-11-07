@@ -4040,3 +4040,75 @@ button {
   .notelink-cols { grid-template-columns: 1fr; }
   .notelink-list { max-height: 180px; }
 }
+
+/* ---------------- 文档卡片（拖进来的 .md） ---------------- */
+/* 复用 .html-card 的外框/工具条样式，这里只补 .md 特有的差异 */
+.md-card .html-card-body {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+/* 卡片模式高度记在 body 上（style 里），内容在里面滚 */
+.md-render {
+  outline: none;
+}
+.md-card .md-render {
+  padding: 14px 18px 6px;
+}
+.md-card.inline .md-render {
+  /* 融入正文：贴着纸张排版，和正文文字对齐 */
+  padding: 0;
+}
+/* rich-body 自带的 min-height:50vh 是给整篇笔记的，嵌进来的文档不要 */
+.md-render.rich-body {
+  min-height: 0;
+}
+.md-card.inline .html-card-body {
+  overflow: visible;
+  background: transparent;
+}
+/* .md 里嵌的网页卡片：在文档里显示成一块占位（真正的网页在笔记顶层才跑得起来） */
+.md-nested-html {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--sub);
+  background: #faf8f4;
+}
+/* 解析不动时的兜底：把源码摆出来，内容不丢 */
+.md-fallback-src {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--sub);
+  background: #faf8f4;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+/* Markdown 表格（拖进来的 .md 里带的） */
+.rich-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.9em 0;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.rich-body th,
+.rich-body td {
+  border: 1px solid var(--line);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.rich-body th.ta-center,
+.rich-body td.ta-center { text-align: center; }
+.rich-body th.ta-right,
+.rich-body td.ta-right { text-align: right; }
+.rich-body thead th {
+  background: #faf8f4;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.rich-body tbody tr:nth-child(2n) { background: #fcfbf8; }

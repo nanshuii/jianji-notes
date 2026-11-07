@@ -6,6 +6,16 @@
  */
 
 import { DEFAULT_HEIGHT, EMBED_LANG, embedMetaJson, embedMode, parseEmbedMeta } from './embed'
+import { EMBED_MD_LANG, mdMetaJson, parseMdMeta } from './mdmeta'
+import type { MdTableAttrs } from './mdtable'
+
+/** 对齐 → 分隔行那格（回写表格用） */
+function sepCell(a: string): string {
+  if (a === 'center') return ':---:'
+  if (a === 'right') return '---:'
+  if (a === 'left') return ':---'
+  return '---'
+}
 
 export type Mark = { type: string; attrs?: Record<string, unknown> }
 
@@ -173,6 +183,14 @@ export function mdToDoc(src: string): PMNode {
           continue
         }
       }
+      // 文档卡片：拖进来的 .md，文件本体也在 .assets 里
+      if (lang === EMBED_MD_LANG) {
+        const meta = parseMdMeta(buf.join('\n'))
+        if (meta) {
+          nodes.push({ type: 'mdEmbed', attrs: { ...meta } })
+          continue
+        }
+      }
       nodes.push({
         type: 'codeBlock',
         attrs: { language: lang || null },
@@ -184,6 +202,32 @@ export function mdToDoc(src: string): PMNode {
     if (!line.trim()) {
       i += 1
       continue
+    }
+
+    // GFM 表格：表头一行 |...|，紧跟一行 |---|---| 分隔
+    if (/^\s*\|.*\|\s*$/.test(line)) {
+      const sep = lines[i + 1] ?? ''
+      const sepCells = sep.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim())
+      const isSep = sepCells.length > 0 && sepCells.every((c) => /^:?-+:?$/.test(c))
+      if (isSep) {
+        const splitRow = (l: string) =>
+          l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim())
+        const align: string[] = sepCells.map((c) =>
+          c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : c.startsWith(':') ? 'left' : '',
+        )
+        const plain = (s: string) => inlineNodes(s).map((t) => t.text ?? '').join('')
+        const header = splitRow(line).map(plain)
+        i += 2
+        const rows: string[][] = []
+        while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) {
+          const cells = splitRow(lines[i]).map(plain)
+          while (cells.length < header.length) cells.push('')
+          rows.push(cells)
+          i += 1
+        }
+        nodes.push({ type: 'mdTable', attrs: { header, rows, align } satisfies MdTableAttrs })
+        continue
+      }
     }
 
     const heading = /^(#{1,6})\s+(.*)$/.exec(line)
@@ -293,8 +337,9 @@ export function mdToDoc(src: string): PMNode {
   }
 
   if (nodes.length === 0) nodes.push({ type: 'paragraph' })
-  // 正文以网页卡片结尾时补一个空段落，光标才有地方落脚
-  else if (nodes[nodes.length - 1].type === 'htmlEmbed') nodes.push({ type: 'paragraph' })
+  // 正文以卡片（网页/文档）结尾时补一个空段落，光标才有地方落脚
+  else if (nodes[nodes.length - 1].type === 'htmlEmbed' || nodes[nodes.length - 1].type === 'mdEmbed')
+    nodes.push({ type: 'paragraph' })
   return { type: 'doc', content: nodes }
 }
 
@@ -365,6 +410,17 @@ function blockToMd(node: PMNode, depth = 0): string {
         fit: Number(node.attrs?.fit) || 0,
       })}\n\`\`\``
     }
+    case 'mdEmbed': {
+      const file = String(node.attrs?.file ?? '').trim()
+      if (!file) return ''
+      const h = Number(node.attrs?.height)
+      return `\`\`\`${EMBED_MD_LANG}\n${mdMetaJson({
+        file,
+        title: String(node.attrs?.title ?? ''),
+        height: Number.isFinite(h) ? h : DEFAULT_HEIGHT,
+        mode: embedMode(node.attrs?.mode),
+      })}\n\`\`\``
+    }
     case 'bulletList':
       return (node.content ?? [])
         .map((li) => `${pad}- ${(li.content ?? []).map((c) => blockToMd(c, depth + 1)).join('\n')}`)
@@ -391,6 +447,20 @@ function blockToMd(node: PMNode, depth = 0): string {
         .join('\n')
     case 'image':
       return imgToMd(node)
+    case 'mdTable': {
+      const a = node.attrs as Partial<MdTableAttrs>
+      const header = Array.isArray(a.header) ? a.header : []
+      const rows = Array.isArray(a.rows) ? a.rows : []
+      const align = Array.isArray(a.align) ? a.align : []
+      const row = (cells: string[]) => `| ${cells.join(' | ')} |`
+      const out = [row(header), row(header.map((_, idx) => sepCell(align[idx] ?? '')))]
+      for (const cells of rows) {
+        const fixed = [...cells]
+        while (fixed.length < header.length) fixed.push('')
+        out.push(row(fixed))
+      }
+      return out.join('\n')
+    }
     default:
       return inlineToMd(node.content)
   }

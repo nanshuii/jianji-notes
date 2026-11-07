@@ -191,11 +191,11 @@ check('应用启动成功', (await evaluate(`!!localStorage.getItem('jianji.boot
 
 /* ---------- 1. 入口：工具栏按钮 + 文件框 ---------- */
 const tools = await evaluate(`[...document.querySelectorAll('.rich-tools button')].map(b => b.textContent.trim())`)
-check('工具栏多了「HTML」按钮', tools.includes('HTML'), JSON.stringify(tools))
+check('工具栏多了「HTML·MD」按钮', tools.includes('HTML·MD'), JSON.stringify(tools))
 check(
-  'HTML 文件框只收网页文件',
+  'HTML 文件框收网页和 .md',
   (await evaluate(`document.querySelector('.html-picker')?.getAttribute('accept') ?? ''`)) ===
-    '.html,.htm,.xhtml,text/html',
+    '.html,.htm,.xhtml,.md,.markdown,text/html,text/markdown',
   await evaluate(`document.querySelector('.html-picker')?.getAttribute('accept') ?? ''`),
 )
 

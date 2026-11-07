@@ -6,9 +6,11 @@
  * ⌘V 粘贴 / 网页里直接拖」走同一条插入路径，压缩、落点、错误提示都只有一份。
  */
 import { isHtmlFile } from './embed'
+import { isMdFile } from './mdmeta'
 
 export const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|svg|avif|heic|heif|tiff?|ico)$/i
 const HTML_EXT = /\.(html?|xhtml)$/i
+const MD_EXT = /\.(md|markdown)$/i
 
 /** Finder 拖进来的路径常常没有 MIME，只能按扩展名认 */
 export function isImagePath(path: string | null | undefined): boolean {
@@ -17,6 +19,11 @@ export function isImagePath(path: string | null | undefined): boolean {
 
 export function isHtmlPath(path: string | null | undefined): boolean {
   return typeof path === 'string' && HTML_EXT.test(path)
+}
+
+/** Finder 拖进来的 Markdown 文档 */
+export function isMdPath(path: string | null | undefined): boolean {
+  return typeof path === 'string' && MD_EXT.test(path)
 }
 
 /** 网页里拖进来的 File：优先看 MIME，MIME 为空时再按扩展名兜底 */
@@ -31,7 +38,7 @@ export function isImageFile(
 export function isDroppableFile(
   f: { name?: string; type?: string } | null | undefined,
 ): boolean {
-  return isImageFile(f) || isHtmlFile(f)
+  return isImageFile(f) || isHtmlFile(f) || isMdFile(f)
 }
 
 /** 扩展名 → MIME，和 Rust 侧 image_mime() 保持一致 */
@@ -61,6 +68,8 @@ export type DroppedPaths = {
   pages: string[]
   /** 图片路径 */
   images: string[]
+  /** Markdown 文档路径 */
+  docs: string[]
   /** 不认识的文件，用来给用户一个提示 */
   others: string[]
 }
@@ -69,11 +78,12 @@ export type DroppedPaths = {
 export function classifyPaths(
   paths: readonly (string | null | undefined)[] | null | undefined,
 ): DroppedPaths {
-  const out: DroppedPaths = { pages: [], images: [], others: [] }
+  const out: DroppedPaths = { pages: [], images: [], docs: [], others: [] }
   for (const p of paths ?? []) {
     if (typeof p !== 'string' || !p) continue
     if (isImagePath(p)) out.images.push(p)
     else if (isHtmlPath(p)) out.pages.push(p)
+    else if (isMdPath(p)) out.docs.push(p)
     else out.others.push(p)
   }
   return out
@@ -122,6 +132,9 @@ export async function pathsToFiles(
       if (isHtmlPath(path)) {
         const html = await reader.readDroppedFile(path)
         out.push(new File([html], name, { type: 'text/html' }))
+      } else if (isMdPath(path)) {
+        const md = await reader.readDroppedFile(path)
+        out.push(new File([md], name, { type: 'text/markdown' }))
       } else if (isImagePath(path)) {
         const uri = await reader.readDroppedImage(path)
         out.push(dataUrlToFile(uri, name))
