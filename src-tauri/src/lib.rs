@@ -338,8 +338,10 @@ fn check_asset_name(name: &str) -> Result<(), String> {
     if name.starts_with('.') {
         return Err("附件名不能以 . 开头".into());
     }
-    if !name.to_lowercase().ends_with(".html") {
-        return Err("只接受 .html 附件".into());
+    // 附件只有两种：拖进来的网页（.html）和 Markdown 文档（.md）
+    let lower = name.to_lowercase();
+    if !(lower.ends_with(".html") || lower.ends_with(".md")) {
+        return Err("只接受 .html / .md 附件".into());
     }
     Ok(())
 }
@@ -348,8 +350,9 @@ fn write_asset_in(dir: &Path, name: &str, content: &str) -> Result<(), String> {
     check_asset_name(name)?;
     fs::create_dir_all(dir).map_err(|e| format!("创建附件目录失败: {e}"))?;
     let path = dir.join(name);
-    // 同样先写临时文件再改名，避免写一半断掉留下半个网页
-    let tmp = path.with_extension("html.tmp");
+    // 同样先写临时文件再改名，避免写一半断掉留下半个文件；
+    // tmp 名直接把扩展名换成 .tmp，html/md 两类附件互不撞车
+    let tmp = path.with_extension("tmp");
     fs::write(&tmp, content).map_err(|e| format!("写入网页失败: {e}"))?;
     fs::rename(&tmp, &path).map_err(|e| format!("保存网页失败: {e}"))?;
     Ok(())
@@ -412,17 +415,17 @@ fn open_url(url: String) -> Result<(), String> {
 #[tauri::command]
 fn read_external_file(path: String) -> Result<String, String> {
     let p = PathBuf::from(&path);
-    if p.extension()
+    let ext = p
+        .extension()
         .and_then(|s| s.to_str())
-        .map(|s| s.to_lowercase())
-        .map(|s| s == "html" || s == "htm" || s == "xhtml")
-        != Some(true)
-    {
-        return Err("只支持拖入 .html 网页文件".into());
+        .map(|s| s.to_lowercase());
+    let ok = matches!(ext.as_deref(), Some("html") | Some("htm") | Some("xhtml") | Some("md") | Some("markdown"));
+    if !ok {
+        return Err("只支持拖入 .html 网页或 .md 文档".into());
     }
     let meta = fs::metadata(&p).map_err(|e| format!("读不到这个文件: {e}"))?;
     if meta.len() > 32 * 1024 * 1024 {
-        return Err("网页太大了（超过 32MB）".into());
+        return Err("文件太大了（超过 32MB）".into());
     }
     fs::read_to_string(&p).map_err(|e| format!("读取文件失败: {e}"))
 }
@@ -554,10 +557,13 @@ mod tests {
         assert!(check_asset_name("../逃出去.html").is_err());
         assert!(check_asset_name("/etc/passwd.html").is_err());
         assert!(check_asset_name(".隐藏.html").is_err());
-        assert!(check_asset_name("笔记.md").is_err());
+        assert!(check_asset_name("笔记.txt").is_err());
         assert!(check_asset_name("").is_err());
         assert!(check_asset_name("20261103-1413-ab12.html").is_ok());
         assert!(check_asset_name("大写.HTML").is_ok());
+        // 文档卡片：拖进来的 .md 附件（含保存前留的 .bak.md）
+        assert!(check_asset_name("md-20261107-153000-1a2b.md").is_ok());
+        assert!(check_asset_name("md-20261107-153000-1a2b.bak.md").is_ok());
     }
 
     #[test]
