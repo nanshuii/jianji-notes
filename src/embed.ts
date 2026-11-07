@@ -15,6 +15,14 @@ export const DEFAULT_HEIGHT = 520
 export const MIN_HEIGHT = 160
 export const MAX_HEIGHT = 2000
 
+/**
+ * 融入正文时网页摊开的真实高度，可以远超卡片上限（长表格能到两万像素）。
+ * 上限只是防着异常页面（带 100vh 元素的那种）把笔记撑到无限高。
+ */
+export const INLINE_MAX_HEIGHT = 24000
+/** 融入模式量到的高度下限：比这还小的量多半是还没排版完 */
+export const MIN_FIT_HEIGHT = 120
+
 /** 网页内容的缩放倍数：流程图这类页面按宽度缩，正文窄的时候字会小到看不清 */
 export const DEFAULT_ZOOM = 1
 export const MIN_ZOOM = 0.5
@@ -47,6 +55,18 @@ export type EmbedMeta = {
   zoom?: number
   /** card（缺省）= 卡片；inline = 融入正文、自动贴合内容高度 */
   mode?: EmbedMode
+  /**
+   * 融入正文时量出来的网页高度，记在笔记里让下次打开「一上来就是最终高度」，
+   * 不用先从占位高度撑开一次（那一下会把正文文字推来推去）。
+   */
+  fit?: number
+}
+
+/** 量出来的高度夹到合法范围，0 / 非法都当「还没量过」 */
+export function clampFit(v: unknown): number {
+  const n = Number(v)
+  if (!Number.isFinite(n) || n < MIN_FIT_HEIGHT) return 0
+  return Math.min(INLINE_MAX_HEIGHT, Math.round(n))
 }
 
 /** 把任意输入夹到合法的缩放范围里，缺省/非法都当 1 */
@@ -98,7 +118,7 @@ export function parseEmbedMeta(raw: string): EmbedMeta | null {
       ? Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, Math.round(h)))
       : DEFAULT_HEIGHT
     const zoom = clampZoom(o.zoom)
-    return { file, title, height, zoom, mode: embedMode(o.mode) }
+    return { file, title, height, zoom, mode: embedMode(o.mode), fit: clampFit(o.fit) }
   } catch {
     return null
   }
@@ -112,6 +132,9 @@ export function embedMetaJson(m: EmbedMeta): string {
   const out: Record<string, unknown> = { file: m.file, title: m.title ?? '', height }
   if (zoom !== DEFAULT_ZOOM) out.zoom = zoom
   if (mode !== DEFAULT_MODE) out.mode = mode
+  // 融入模式记下量到的高度：下次打开直接按这个高度摆好，正文不会再被推一下
+  const fit = mode === 'inline' ? clampFit(m.fit) : 0
+  if (fit) out.fit = fit
   return JSON.stringify(out)
 }
 

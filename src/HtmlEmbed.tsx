@@ -19,12 +19,15 @@ import {
   DEFAULT_HEIGHT,
   DEFAULT_MODE,
   DEFAULT_ZOOM,
+  INLINE_MAX_HEIGHT,
   INSERT_MODE,
   MAX_HEIGHT,
   MAX_ZOOM,
+  MIN_FIT_HEIGHT,
   MIN_HEIGHT,
   MIN_ZOOM,
   ZOOM_STEP,
+  clampFit,
   clampZoom,
   embedMode,
   humanSize,
@@ -40,10 +43,77 @@ import {
 const SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals'
 
 /**
- * 融入正文的网页会整篇铺开，给个上限防止异常页面（比如带 100vh 元素）把笔记撑到无限高。
- * 到顶之后还是能全屏/用浏览器打开看完整内容。
+ * 量一份网页真正需要多高（不插进正文，先在看不见的 iframe 里排一遍）。
+ *
+ * 目的只有一个：插入的那一刻就按最终高度摆好，正文文字只被推一次，
+ * 而不是先按占位高度挤进来、再一截一截往上顶（那就是「抖」的来源）。
  */
-const INLINE_MAX_HEIGHT = 24000
+export function measureHtmlInPage(html: string, width: number): Promise<number> {
+  return new Promise((resolve) => {
+    const frame = document.createElement('iframe')
+    frame.setAttribute('sandbox', SANDBOX)
+    frame.setAttribute('aria-hidden', 'true')
+    frame.tabIndex = -1
+    frame.style.cssText = [
+      'position:fixed',
+      'left:-99999px',
+      'top:0',
+      `width:${Math.max(320, Math.round(width))}px`,
+      'height:1200px',
+      'border:0',
+      'visibility:hidden',
+      'pointer-events:none',
+    ].join(';')
+    let done = false
+    const finish = (h: number) => {
+      if (done) return
+      done = true
+      frame.remove()
+      resolve(h)
+    }
+    const read = () => {
+      const doc = frame.contentDocument
+      if (!doc?.body) return 0
+      const win = doc.defaultView
+      let h = 0
+      for (const el of Array.from(doc.body.children)) {
+        const st = win?.getComputedStyle(el)
+        if (!st || st.display === 'none' || st.position === 'fixed') continue
+        const r = el.getBoundingClientRect()
+        if (r.height > 0 || r.bottom > 0) h = Math.max(h, r.bottom)
+      }
+      if (!h) h = doc.body.scrollHeight
+      const pad = Number.parseFloat(win?.getComputedStyle(doc.body).paddingBottom ?? '0') || 0
+      return Math.round(h + pad + 2)
+    }
+    // 排完再量：字体、表格、脚本画的图都在 load 之后才定稿
+    const measureSoon = () => {
+      // 量的时候把滚动条藏掉：占位 iframe 只有 1200 高，页面会溢出、右侧多出一条滚动条，
+      // 可用宽度就比正式显示时窄十几像素 —— 排出来的高度会偏高，插进去还要再缩一下（就抖了）
+      try {
+        const doc = frame.contentDocument
+        if (doc?.documentElement) doc.documentElement.style.overflowY = 'hidden'
+      } catch {
+        /* 跨域就按原样量 */
+      }
+      window.setTimeout(() => {
+        const a = read()
+        window.setTimeout(() => {
+          const b = read()
+          // 两次一致才算稳定，不一致就再等一帧
+          finish(Math.abs(a - b) > 1 ? b : a)
+        }, 120)
+      }, 160)
+    }
+    frame.addEventListener('load', measureSoon)
+    frame.srcdoc = html
+    document.body.appendChild(frame)
+    // 页面里有卡住的资源也不能一直等：1.6 秒后按当时量到的收工
+    window.setTimeout(() => finish(read()), 1600)
+  })
+}
+
+/** 融入正文铺开的网页可以很长，INLINE_MAX_HEIGHT 是防异常页面（比如带 100vh 元素）的上限 */
 
 /**
  * srcDoc iframe 的 base URL 继承自父文档，页面里的 href="#id" 会被解析成「父页面 URL + #id」。
@@ -142,6 +212,15 @@ export const HtmlEmbed = Node.create({
         parseHTML: (el: HTMLElement) => embedMode(el.getAttribute('data-mode')),
         renderHTML: (attrs: Record<string, unknown>) => ({ 'data-mode': attrs.mode }),
       },
+      /**
+       * 融入模式量到的网页高度。存进笔记里，下次打开一上来就是这个高度，
+       * 正文不会被「先按占位高度排一遍、再撑开」推着抖一下。
+       */
+      fit: {
+        default: 0,
+        parseHTML: (el: HTMLElement) => clampFit(el.getAttribute('data-fit')),
+        renderHTML: (attrs: Record<string, unknown>) => ({ 'data-fit': attrs.fit }),
+      },
     }
   },
   parseHTML() {
@@ -165,18 +244,45 @@ function embedCount(editor: Editor): number {
 }
 
 /**
+ * 融入正文的网页实际有多宽：正文宽度 + 纸张左右留白 ×2。
+ * 融入模式用负边距把两边的留白抵掉，所以宽度比正文框宽一圈；
+ * 量高时必须用这个宽度，否则量出来偏高，插进去还要再缩一下（就是那一下「抖」）。
+ */
+function inlineFrameWidth(editor: Editor): number {
+  const el = editor.view.dom as HTMLElement
+  // 正文里已经有一张融入卡片，直接量它，最准
+  const live = el.querySelector('.html-card.inline') as HTMLElement | null
+  if (live) {
+    const w = live.getBoundingClientRect().width
+    if (w > 200) return w
+  }
+  const padX = Number.parseFloat(getComputedStyle(el).getPropertyValue('--paper-pad-x'))
+  const pad = Number.isFinite(padX) ? padX : 0
+  return el.clientWidth + pad * 2
+}
+
+/**
  * 把一段 HTML 存成附件并插进正文；at 是落点（拖拽时按鼠标位置插）。
  *
  * 这里不靠 focus 决定落点 —— 桌面端拖文件时窗口本身没聚焦，focus 那条路会
  * 悄悄失败，结果文件写进 .assets 了、正文里却什么都没有。改成直接算位置 +
  * insertContentAt，插完再验一次，没落地就退到「追加到末尾」并报错。
  */
+
 export async function insertHtmlEmbed(
   editor: Editor,
   html: string,
   fileName: string,
   at?: number,
-): Promise<{ file: string; title: string; height: number; mode: EmbedMode }> {
+): Promise<{ file: string; title: string; height: number; mode: EmbedMode; fit: number }> {
+  // 先在看不见的 iframe 里排一遍，量出这份网页真正多高。
+  // 插进去时直接就是这个高度，正文文字只被推一次，不会「先挤进来再一截截撑开」。
+  let fit = 0
+  try {
+    fit = clampFit(await measureHtmlInPage(html, inlineFrameWidth(editor)))
+  } catch {
+    /* 量不出来就按默认高度进来，后面的自动高度会补上 */
+  }
   const file = await getStorage().saveAsset(makeAssetName(), html)
   // 新插入的网页默认「融入正文」：不再是一个带外框的小卡片
   const attrs = {
@@ -185,6 +291,7 @@ export async function insertHtmlEmbed(
     height: DEFAULT_HEIGHT,
     zoom: DEFAULT_ZOOM,
     mode: INSERT_MODE,
+    fit,
   }
   // 后面补一个空段落：不然卡片落在正文末尾时，光标没地方落脚没法接着写
   const nodes = [{ type: 'htmlEmbed', attrs }, { type: 'paragraph' }]
@@ -237,6 +344,8 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
   const zoom = clampZoom(node.attrs.zoom)
   /** 融入正文：网页整篇铺在笔记里，没有卡片外框，高度跟着内容长 */
   const inline = embedMode(node.attrs.mode) === 'inline'
+  /** 笔记里记着的量高结果（0 = 还没量过） */
+  const savedFit = clampFit(node.attrs.fit)
 
   const [html, setHtml] = useState<string | null>(null)
   const [error, setError] = useState('')
@@ -244,8 +353,11 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
   /** iframe 的重载序号：改 key 强制换一个新文档（srcDoc 字符串没变时它不会自己重载） */
   const [frameSeq, setFrameSeq] = useState(0)
   const [liveH, setLiveH] = useState(height)
-  /** 融入模式下量出来的内容高度；0 = 还没量到，先用笔记里记的高度 */
-  const [autoH, setAutoH] = useState(0)
+  /**
+   * 融入模式下量出来的内容高度。
+   * 初值直接用笔记里记的高度：打开就已经摆好，不会先塌一下再撑开。
+   */
+  const [autoH, setAutoH] = useState(() => (embedMode(node.attrs.mode) === 'inline' ? clampFit(node.attrs.fit) : 0))
   /** 屏幕上真正的高度 = 基准高度 × 缩放倍数 */
   const shownH = Math.max(MIN_HEIGHT, Math.round(liveH * zoom))
   const [full, setFull] = useState(false)
@@ -383,26 +495,80 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
   /** 同页可能有多张网页，用 id 区分是谁报上来的高度 */
   const heightId = useRef(`jjh-${Math.random().toString(36).slice(2, 10)}`)
 
+  /** 量到的真实高度（ref 里留一份，定时器 / 回调读得到最新值） */
+  const autoRef = useRef(autoH)
+  autoRef.current = autoH
+  /** 「只准长、回缩要慢」：网页临时变矮（脚本还没画完）先不动，稳住再收 */
+  const shrinkTimer = useRef(0)
+  /** 把量到的高度记回笔记的防抖计时器 */
+  const saveFitTimer = useRef(0)
+
+  /**
+   * 把量到的高度记进笔记。
+   * 不进撤回栈：这是自动记账，不该占掉一次「撤回」—— 否则刚插进来的网页，
+   * 按一次撤回看着毫无反应（撤掉的是这个属性），得按两次才真的撤掉网页。
+   */
+  const rememberFit = (h: number) => {
+    if (!(h > 0)) return
+    const pos = getPos()
+    if (typeof pos !== 'number') return
+    const at = editor.state.doc.nodeAt(pos)
+    if (!at || at.type.name !== 'htmlEmbed') return
+    if (Math.abs((Number(at.attrs.fit) || 0) - h) <= 12) return
+    const tr = editor.state.tr.setNodeMarkup(pos, undefined, { ...at.attrs, fit: h })
+    tr.setMeta('addToHistory', false)
+    editor.view.dispatch(tr)
+  }
+
   /**
    * 融入正文：让 iframe 自己量内容高度，用 postMessage 报给笔记页面。
    * 量的是「子元素底部」而不是 body.scrollHeight —— 后者在 iframe 里至少等于
    * 视口高度，iframe 一撑高它跟着涨，会陷入越量越高的循环。
-   * 页面里的折叠、Tab、图表动画改了高度，ResizeObserver 会继续报，笔记跟着长。
+   *
+   * 收到的数不能照单全收：网页在排版过程中会连着报好几个相近的值，
+   * 每个都应用一次，正文文字就被推来推去（看着就是「抖」）。所以：
+   * - 变高立刻跟上（慢了会裁住内容）
+   * - 只有几像素的差别忽略
+   * - 明显变矮要等它稳住 300ms 再收（筛选、折叠、脚本重排都会先矮一下）
    */
   useEffect(() => {
     if (!inline) return
+    const apply = (next: number) => {
+      if (Math.abs(autoRef.current - next) <= 2) return
+      autoRef.current = next
+      setAutoH(next)
+      // 记回笔记：下次打开直接就是这个高度，不用再撑一次
+      window.clearTimeout(saveFitTimer.current)
+      saveFitTimer.current = window.setTimeout(() => {
+        const h = autoRef.current
+        if (h > 0) rememberFit(h)
+      }, 700)
+    }
     const onMsg = (e: MessageEvent) => {
       const d = e.data as { __jianjiHeightId?: string; height?: number } | null
       if (!d || d.__jianjiHeightId !== heightId.current) return
       if (frameRef.current && e.source !== frameRef.current.contentWindow) return
       const h = Number(d.height)
       if (!Number.isFinite(h) || h <= 0) return
-      const next = Math.max(60, Math.min(INLINE_MAX_HEIGHT, Math.ceil(h)))
-      setAutoH((prev) => (Math.abs(prev - next) <= 2 ? prev : next))
+      const next = Math.max(MIN_FIT_HEIGHT, Math.min(INLINE_MAX_HEIGHT, Math.ceil(h)))
+      const cur = autoRef.current
+      if (!cur || next > cur + 6) {
+        window.clearTimeout(shrinkTimer.current)
+        apply(next)
+        return
+      }
+      if (cur - next <= 8) return
+      window.clearTimeout(shrinkTimer.current)
+      shrinkTimer.current = window.setTimeout(() => apply(next), 300)
     }
     window.addEventListener('message', onMsg)
-    return () => window.removeEventListener('message', onMsg)
-  }, [inline])
+    return () => {
+      window.removeEventListener('message', onMsg)
+      window.clearTimeout(shrinkTimer.current)
+      window.clearTimeout(saveFitTimer.current)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inline, savedFit])
 
   const attachAutoHeight = (frame: HTMLIFrameElement) => {
     const doc = frame.contentDocument
@@ -424,9 +590,15 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
   if (W.__jianjiAutoHeightDoc === document) return;
   W.__jianjiAutoHeightDoc = document;
   var ID = ${JSON.stringify(heightId.current)};
-  function measure() {
+  var last = 0, timer = 0, tries = 0;
+  // 融入模式：网页整篇铺开、由笔记负责滚动，自己不需要滚动条。
+  // 关掉它很关键 —— 高度只要差一点就会出现滚动条，滚动条一占宽度内容就重新排版、
+  // 量出来又变高，高度和滚动条互相推着来回变（看着就是页面在抖）。
+  try { document.documentElement.style.overflowY = 'hidden'; } catch (e) {}
+
+  function read() {
     var b = document.body;
-    if (!b) return;
+    if (!b) return 0;
     var h = 0, kids = b.children;
     for (var i = 0; i < kids.length; i++) {
       var el = kids[i], st = W.getComputedStyle(el);
@@ -436,9 +608,30 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
     }
     if (kids.length === 0 || h < 20) h = Math.max(h, b.scrollHeight);
     var pad = parseFloat(W.getComputedStyle(b).paddingBottom) || 0;
-    h = Math.ceil(h + pad + 2);
+    return Math.ceil(h + pad + 2);
+  }
+
+  function publish(h) {
+    if (!h || Math.abs(h - last) <= 4) return;
+    last = h;
     try { W.parent.postMessage({ __jianjiHeightId: ID, height: h }, '*'); } catch (e) {}
   }
+
+  // 排版还在动的时候先别报：隔一帧再量一次，两次一致才算定稿。
+  // 这样外面收到的是一个终值，而不是「长一点、再长一点」连推好几次（正文会抖）。
+  function measure() {
+    clearTimeout(timer);
+    timer = setTimeout(function () {
+      var a = read();
+      W.requestAnimationFrame(function () {
+        var b = read();
+        if (Math.abs(a - b) > 1 && tries < 8) { tries++; measure(); return; }
+        tries = 0;
+        publish(b || a);
+      });
+    }, 50);
+  }
+
   W.__jianjiMeasure = measure;
   if (W.ResizeObserver) {
     var ro = new W.ResizeObserver(measure);
@@ -470,7 +663,8 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
     const h = Math.max(MIN_HEIGHT, Math.min(FIT_MAX, Math.round(autoH || liveH)))
     fitRef.current = file
     setLiveH(h)
-    updateAttributes({ height: h })
+    // 顺手把量到的高度记下来：下次再切回「融入」就不用重新撑一遍
+    updateAttributes({ height: h, fit: Math.round(autoH || savedFit || 0) })
     // 只在模式切换时跑一次，别把用户之后拖的高度改掉
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inline, file])
@@ -497,12 +691,16 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
   /** 卡片 ⇄ 融入正文：可以随时来回切，网页文件本身不动 */
   const switchMode = (next: EmbedMode) => {
     if (next === 'inline') {
-      setAutoH(0)
-      updateAttributes({ mode: 'inline' })
+      // 先用之前量过 / 卡片当前的高度摆好，别先塌成一条再撑开
+      const start = savedFit || Math.max(liveH, MIN_HEIGHT)
+      autoRef.current = start
+      setAutoH(start)
+      updateAttributes({ mode: 'inline', fit: savedFit || 0 })
     } else {
       updateAttributes({
         mode: 'card',
         height: Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, Math.round(autoH || height))),
+        fit: Math.round(autoH || savedFit || 0),
       })
     }
   }
@@ -733,9 +931,12 @@ function HtmlCard({ node, updateAttributes, selected, deleteNode, editor, getPos
       // 缩放靠「把 iframe 的 CSS 宽度按倍数放大」实现：页面里的 width:100% 会跟着铺开，
       // 内容整体变大，卡片内横向滚动；直接把内容 scale 会把布局一起缩回去，没用
       style={{
-        height: inline ? autoH || Math.min(height, 320) : shownH,
+        // 融入模式：用过记下来的高度／量到的高度；都没有才用卡片高度占位
+        height: inline ? autoH || savedFit || Math.max(height, MIN_HEIGHT) : shownH,
         width: inline ? '100%' : `${Math.round(zoom * 100)}%`,
         minWidth: inline ? 0 : zoom >= DEFAULT_ZOOM ? 380 : 0,
+        // 还不知道多高时先不显示：等量完一次性摆好，省得正文先被「半截网页」推一下
+        visibility: inline && !autoH && !savedFit ? 'hidden' : undefined,
       }}
       onLoad={onFrameLoad}
     />

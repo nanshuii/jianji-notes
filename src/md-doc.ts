@@ -362,6 +362,7 @@ function blockToMd(node: PMNode, depth = 0): string {
         height: Number.isFinite(h) ? h : DEFAULT_HEIGHT,
         zoom: Number(node.attrs?.zoom) || 1,
         mode: embedMode(node.attrs?.mode),
+        fit: Number(node.attrs?.fit) || 0,
       })}\n\`\`\``
     }
     case 'bulletList':
